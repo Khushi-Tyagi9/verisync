@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>verisync · reconciliation</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #1a1d21; --muted: #6b7280;
+    --line: #e4e7eb; --accent: #2563eb;
+    --good: #15803d; --good-bg: #dcfce7;
+    --warn: #b45309; --warn-bg: #fef3c7;
+    --bad: #b91c1c; --bad-bg: #fee2e2;
+    --info: #1e40af; --info-bg: #dbeafe;
+    --quiet: #6b7280; --quiet-bg: #f1f2f4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --panel: #171a1f; --ink: #e6e8eb; --muted: #9aa1ab;
+      --line: #2a2e35; --accent: #60a5fa;
+      --good: #4ade80; --good-bg: #10241a;
+      --warn: #fbbf24; --warn-bg: #2a2110;
+      --bad: #f87171; --bad-bg: #2a1414;
+      --info: #93c5fd; --info-bg: #12213b;
+      --quiet: #9aa1ab; --quiet-bg: #1c2026;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 24px 20px 60px; }
+  header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 20px; }
+  h1 { font-size: 18px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .live { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin-left: auto; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); }
+  .dot.stale { background: var(--bad); }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 22px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .card .n { font-size: 26px; font-weight: 680; letter-spacing: -0.02em; }
+  .card .l { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .card.good .n { color: var(--good); }
+  .card.info .n { color: var(--info); }
+  .card.bad  .n { color: var(--bad); }
+  .card.warn .n { color: var(--warn); }
+
+  .panels { display: grid; grid-template-columns: 1.6fr 1fr; gap: 16px; margin-bottom: 22px; }
+  @media (max-width: 760px) { .panels { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .panel.actionable { border-color: var(--warn); box-shadow: inset 3px 0 0 var(--warn); }
+  .panel h2 { font-size: 13px; margin: 0 0 4px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .panel .hint { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+  .panel.actionable h2 { color: var(--warn); }
+  .panel.quiet { background: var(--quiet-bg); }
+  .panel.quiet h2 { color: var(--quiet); }
+  .bignum { font-size: 34px; font-weight: 700; letter-spacing: -0.02em; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
+  .chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--warn-bg); color: var(--warn); border: 1px solid transparent; }
+
+  ul.rq { list-style: none; margin: 10px 0 0; padding: 0; }
+  ul.rq li { padding: 8px 0; border-top: 1px solid var(--line); font-size: 13px; }
+  ul.rq li:first-child { border-top: 0; }
+  ul.rq .oid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  ul.rq .rsn { color: var(--warn); font-weight: 600; }
+  ul.rq .meta { color: var(--muted); font-size: 12px; }
+
+  .feed { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .feed h2 { font-size: 13px; margin: 0; padding: 14px 16px; text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid var(--line); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .scroll { max-height: 460px; overflow-y: auto; }
+  th, td { text-align: left; padding: 8px 16px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
+  td.oid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+  td.when { color: var(--muted); }
+  tr.fresh { animation: flash 1.6s ease-out; }
+  @keyframes flash { from { background: var(--info-bg); } to { background: transparent; } }
+
+  .tag { font-size: 11px; font-weight: 650; padding: 1px 7px; border-radius: 6px; background: var(--quiet-bg); color: var(--quiet); }
+  .tag.APPLY_AUTOCORRECT, .tag.MARK_RESOLVED_NATURALLY { background: var(--good-bg); color: var(--good); }
+  .tag.ARM_RECHECK { background: var(--info-bg); color: var(--info); }
+  .tag.FLAG_FOR_REVIEW, .tag.RECHECK_RETRIES_EXHAUSTED, .tag.DEAD_LETTER { background: var(--bad-bg); color: var(--bad); }
+  .tag.ROUTE_DISPUTED { background: var(--warn-bg); color: var(--warn); }
+  .src { font-size: 11px; color: var(--muted); }
+  .transition { color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>verisync</h1>
+    <span class="sub">real-time reconciliation &middot; Razorpay vs merchant record</span>
+    <span class="live"><span class="dot" id="dot"></span><span id="livetext">connecting&hellip;</span></span>
+  </header>
+
+  <div class="cards" id="cards"></div>
+
+  <div class="panels">
+    <div class="panel actionable">
+      <h2>Review queue</h2>
+      <div class="hint">Genuine anomalies. Each one needs a human.</div>
+      <div class="bignum" id="rqOpen">&mdash;</div>
+      <div class="chips" id="rqChips"></div>
+      <ul class="rq" id="rqList"></ul>
+    </div>
+    <div class="panel quiet">
+      <h2>Out of scope</h2>
+      <div class="hint">Order-less traffic (Payment Links, legacy flows). Routine &mdash; nothing to action.</div>
+      <div class="bignum" id="oos">&mdash;</div>
+    </div>
+  </div>
+
+  <div class="feed">
+    <h2>Activity &middot; audit log</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>when</th><th>order</th><th>source</th><th>decision</th><th>transition</th></tr></thead>
+        <tbody id="feed"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+const POLL_MS = __POLL_INTERVAL_MS__;
+const seen = new Set();
+let firstLoad = true;
+
+function fmtTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+function renderCards(o) {
+  const defs = [
+    ["good", o.auto_corrected, "auto-corrected"],
+    ["good", o.resolved_naturally, "resolved naturally"],
+    ["warn", o.disputed, "disputed"],
+    ["bad", o.dead_letter, "dead-letter"],
+    ["info", o.in_progress, "in progress"],
+    ["", o.tracked, "orders tracked"],
+  ];
+  const box = document.getElementById("cards");
+  box.innerHTML = "";
+  for (const [cls, n, label] of defs) {
+    const c = el("div", "card " + cls);
+    c.appendChild(el("div", "n", String(n ?? 0)));
+    c.appendChild(el("div", "l", label));
+    box.appendChild(c);
+  }
+}
+
+function renderReview(rq) {
+  document.getElementById("rqOpen").textContent = rq.open ?? 0;
+  const chips = document.getElementById("rqChips");
+  chips.innerHTML = "";
+  for (const [reason, n] of Object.entries(rq.by_reason || {})) {
+    chips.appendChild(el("span", "chip", `${reason} · ${n}`));
+  }
+  const list = document.getElementById("rqList");
+  list.innerHTML = "";
+  for (const item of (rq.recent || [])) {
+    const li = el("li");
+    li.appendChild(el("span", "oid", item.order_id || "(no order id)"));
+    li.appendChild(document.createTextNode(" "));
+    li.appendChild(el("span", "rsn", item.reason));
+    const meta = el("div", "meta", fmtTime(item.at) + (item.event_id ? " · " + item.event_id : ""));
+    li.appendChild(meta);
+    list.appendChild(li);
+  }
+  if (!(rq.recent || []).length) list.appendChild(el("li", "meta", "nothing open"));
+}
+
+function rowKey(a) { return (a.at || "") + "|" + (a.order_id || "") + "|" + (a.decision || "") + "|" + (a.new_state || ""); }
+
+function renderFeed(activity) {
+  const body = document.getElementById("feed");
+  body.innerHTML = "";
+  for (const a of activity) {
+    const key = rowKey(a);
+    const isNew = !firstLoad && !seen.has(key);
+    seen.add(key);
+    const tr = el("tr", isNew ? "fresh" : null);
+    tr.appendChild(el("td", "when", fmtTime(a.at)));
+    tr.appendChild(el("td", "oid", a.order_id || "—"));
+    tr.appendChild(el("td", "src", a.source || ""));
+    const dc = el("td");
+    dc.appendChild(el("span", "tag " + (a.decision || ""), a.decision || "—"));
+    tr.appendChild(dc);
+    const t = a.old_state && a.old_state !== a.new_state
+      ? `${a.old_state} → ${a.new_state}`
+      : (a.new_state || a.old_state || "");
+    tr.appendChild(el("td", "transition", t));
+    body.appendChild(tr);
+  }
+  firstLoad = false;
+}
+
+function setLive(ok) {
+  document.getElementById("dot").className = "dot" + (ok ? "" : " stale");
+  document.getElementById("livetext").textContent = ok
+    ? "live · updated " + new Date().toLocaleTimeString()
+    : "reconnecting…";
+}
+
+async function tick() {
+  try {
+    const res = await fetch("/api/summary", { cache: "no-store" });
+    if (!res.ok) throw new Error(res.status);
+    const s = await res.json();
+    renderCards(s.orders);
+    renderReview(s.review_queue);
+    document.getElementById("oos").textContent = s.out_of_scope.total ?? 0;
+    renderFeed(s.activity || []);
+    setLive(true);
+  } catch (e) {
+    setLive(false);
+  }
+}
+
+tick();
+setInterval(tick, POLL_MS);
+</script>
+</body>
+</html>
