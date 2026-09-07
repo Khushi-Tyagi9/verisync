@@ -136,6 +136,42 @@ _ENQUEUE_REVIEW = """
     ON CONFLICT (event_id) WHERE event_id IS NOT NULL DO NOTHING
 """
 
+# Atomic claim: a fresh server-generated fencing token in the same statement
+# that flips the status. 0 rows => not claimable (already claimed, resolved, or
+# not actually pending).
+_CLAIM_RECHECK = """
+    UPDATE orders_state
+    SET status = 'PROCESSING', claim_token = gen_random_uuid(), updated_at = NOW()
+    WHERE order_id = %(order_id)s AND status = 'PENDING_RECHECK'
+    RETURNING claim_token
+"""
+
+# Completion verifies the token, not just the status. 0 rows => the claim was
+# stolen (reclaimed past the watchdog) and the caller must not write audit_log.
+_COMPLETE_CLAIM = """
+    UPDATE orders_state
+    SET status = %(new_status)s, recheck_at = NULL, claim_token = NULL, updated_at = NOW()
+    WHERE order_id = %(order_id)s AND status = 'PROCESSING' AND claim_token = %(token)s
+    RETURNING order_id
+"""
+
+# Bounded re-arm from a held claim: increment retry_count in the same statement
+# as the status flip and token clear, and route to DEAD_LETTER at the ceiling
+# instead of re-arming forever. Same shape as the stuck-PROCESSING sweep's
+# reclaim (worker/sweep.py) so the retry budget is shared.
+_REARM_OR_DEADLETTER = """
+    UPDATE orders_state
+    SET status = CASE WHEN retry_count + 1 >= %(max_retries)s
+                      THEN 'DEAD_LETTER' ELSE 'PENDING_RECHECK' END,
+        retry_count = retry_count + 1,
+        recheck_at = CASE WHEN retry_count + 1 >= %(max_retries)s
+                          THEN NULL ELSE %(fresh_recheck_at)s END,
+        claim_token = NULL,
+        updated_at = NOW()
+    WHERE order_id = %(order_id)s AND status = 'PROCESSING' AND claim_token = %(token)s
+    RETURNING status, retry_count
+"""
+
 
 def _json(value):
     from psycopg.types.json import Json
@@ -275,6 +311,54 @@ class PostgresStateStore:
                 "details": _json(dict(review.details)) if review.details else None,
             },
         )
+
+    # ------------------------------------------------------------------ #
+    # Recheck claim / completion (used by worker/recheck.py and the sweeps)
+    # ------------------------------------------------------------------ #
+    def claim_recheck(self, conn, order_id: str) -> Optional[str]:
+        """Atomically claim a PENDING_RECHECK row. Returns the fresh fencing
+        token, or None if the row was not claimable."""
+        rec = conn.execute(_CLAIM_RECHECK, {"order_id": order_id}).fetchone()
+        return str(rec[0]) if rec is not None else None
+
+    def complete_claim(self, conn, *, order_id: str, token: str, new_status: str) -> bool:
+        """Token-verified terminal completion. False => claim was stolen; the
+        caller must not have written audit_log in this transaction."""
+        rec = conn.execute(
+            _COMPLETE_CLAIM,
+            {"order_id": order_id, "token": token, "new_status": new_status},
+        ).fetchone()
+        return rec is not None
+
+    def rearm_or_deadletter(
+        self,
+        conn,
+        *,
+        order_id: str,
+        token: str,
+        fresh_recheck_at: datetime,
+        max_retries: int,
+    ) -> Optional[tuple[str, int]]:
+        """Token-verified bounded re-arm. Returns (new_status, retry_count), or
+        None if the claim was stolen."""
+        rec = conn.execute(
+            _REARM_OR_DEADLETTER,
+            {
+                "order_id": order_id,
+                "token": token,
+                "fresh_recheck_at": fresh_recheck_at,
+                "max_retries": max_retries,
+            },
+        ).fetchone()
+        return (rec[0], rec[1]) if rec is not None else None
+
+    def insert_audit(self, conn, audit: AuditEntry, *, payload=None) -> bool:
+        """Public wrapper: insert one audit_log row, ON CONFLICT DO NOTHING.
+        False => the event_id already existed."""
+        return self._insert_audit(conn, audit, payload=payload)
+
+    def enqueue_review(self, conn, review: ReviewItem) -> None:
+        self._enqueue_review(conn, review)
 
     def close(self) -> None:
         try:

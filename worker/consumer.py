@@ -27,9 +27,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from decision.engine import evaluate
-from decision.models import ReconStatus
+from decision.models import Action, ReconStatus
 
 from .config import WorkerSettings, load_settings
+from .delayqueue import RedisDelayQueue
 from .idempotency import RedisIdempotencyFilter
 from .normalize import envelope_to_event
 from .state import PostgresStateStore
@@ -68,12 +69,16 @@ class ReconciliationWorker:
         consumer,
         store: PostgresStateStore,
         idempotency: RedisIdempotencyFilter,
+        delay_queue: RedisDelayQueue,
         settings: WorkerSettings,
+        redis_client=None,
     ) -> None:
         self._consumer = consumer
         self._store = store
         self._idem = idempotency
+        self._delayq = delay_queue
         self._settings = settings
+        self._redis = redis_client
         self._recheck_delay = timedelta(seconds=settings.recheck_delay_seconds)
         self._stopping = False
 
@@ -82,13 +87,16 @@ class ReconciliationWorker:
         cls, settings: Optional[WorkerSettings] = None
     ) -> "ReconciliationWorker":
         settings = settings or load_settings()
+        redis_client = build_redis(settings)
         return cls(
             consumer=build_consumer(settings),
             store=PostgresStateStore.from_settings(settings),
             idempotency=RedisIdempotencyFilter(
-                build_redis(settings), ttl_seconds=settings.idempotency_ttl_seconds
+                redis_client, ttl_seconds=settings.idempotency_ttl_seconds
             ),
+            delay_queue=RedisDelayQueue(redis_client),
             settings=settings,
+            redis_client=redis_client,
         )
 
     def request_stop(self, *_signal_args: Any) -> None:
@@ -200,23 +208,40 @@ class ReconciliationWorker:
             )
 
         self._idem.mark_seen(event.event_id)
+
+        decision = evaluation.decision
+        if (
+            decision.action is Action.ARM_RECHECK
+            and result.pointer_moved
+            and decision.recheck_at is not None
+        ):
+            # Fast path. Postgres already holds recheck_at; if this push is lost
+            # to a crash, the Postgres fallback sweep still fires the recheck.
+            try:
+                self._delayq.push(event.order_id, decision.recheck_at)
+            except Exception as exc:
+                log.warning("delay-queue push failed for %s: %s", event.order_id, exc)
+
         log.info(
             "event %s order=%s type=%s -> %s%s%s",
             event.event_id,
             event.order_id,
             event.event_type,
-            evaluation.decision.action.value,
+            decision.action.value,
             "" if result.audit_written else " (replay, audit already present)",
             "" if result.pointer_moved or not result.audit_written else " (pointer unchanged)",
         )
         return True
 
     def close(self) -> None:
+        # idempotency filter and delay queue share self._redis; close it once.
         for name, obj in (
             ("consumer", self._consumer),
             ("store", self._store),
-            ("idempotency", self._idem),
+            ("redis", self._redis),
         ):
+            if obj is None:
+                continue
             try:
                 obj.close()
             except Exception as exc:
