@@ -7,11 +7,17 @@ It polls the Redis delay queue for due entries and, for each one:
    transaction, so the PROCESSING+token state is durable before any work).
 2. Re-fetches current state from Postgres. It never acts on the state captured
    when the recheck was scheduled.
-3. Re-runs the decision logic with ``require_merchant_record=True`` (a merchant
-   record still absent at recheck time is a genuine anomaly, not lag).
+3. Re-runs the decision logic with ``require_merchant_record=True``.
 4. Applies the outcome with token verification. If the completion UPDATE matches
    zero rows the claim was stolen by the stuck-PROCESSING sweep; it writes
    nothing to audit_log and moves on.
+
+Unresolved outcomes -- drift still UNSAFE/INDETERMINATE, or no merchant record
+yet -- all take the same bounded re-arm: a fresh window, ``retry_count`` bumped,
+and DEAD_LETTER + review only once the shared retry ceiling is hit. A missing
+merchant record is not treated as more terminal than an ambiguous one; at one
+window past capture the two are barely distinguishable states of the same slow
+merchant integration.
 
 The Postgres fallback sweep in worker/sweep.py is the backstop for anything that
 never reached the Redis queue (a crash between the orders_state write and the
@@ -161,23 +167,11 @@ class RecheckRunner:
             self._store.insert_audit(conn, decision.audit)
             return _Outcome()
 
-        if action is Action.FLAG_FOR_REVIEW:
-            # Merchant record still absent at recheck: a definitive anomaly, not
-            # lag. Retire the pointer to DEAD_LETTER and queue it for a human.
-            if not self._store.complete_claim(
-                conn, order_id=order_id, token=token, new_status="DEAD_LETTER"
-            ):
-                log.warning("claim stolen for %s before flag; no audit written", order_id)
-                return _Outcome()
-            audit = dataclasses.replace(
-                decision.audit, decision="FLAG_FOR_REVIEW_DEAD_LETTER", new_state="DEAD_LETTER"
-            )
-            self._store.insert_audit(conn, audit)
-            if decision.review is not None:
-                self._store.enqueue_review(conn, decision.review)
-            return _Outcome()
-
-        if action is Action.ARM_RECHECK:
+        # ARM_RECHECK (drift still UNSAFE/INDETERMINATE) and FLAG_FOR_REVIEW (no
+        # merchant record yet) are both unresolved: re-arm a fresh window and
+        # let the shared retry ceiling force DEAD_LETTER + review if it never
+        # resolves. Same path, same budget for both.
+        if action in (Action.ARM_RECHECK, Action.FLAG_FOR_REVIEW):
             fresh = decision.recheck_at or (
                 datetime.now(timezone.utc) + self._recheck_delay
             )
@@ -194,7 +188,9 @@ class RecheckRunner:
             new_status, retry_count = res
             if new_status == "DEAD_LETTER":
                 audit = dataclasses.replace(
-                    decision.audit, decision="RECHECK_RETRIES_EXHAUSTED", new_state="DEAD_LETTER"
+                    decision.audit,
+                    decision="RECHECK_RETRIES_EXHAUSTED",
+                    new_state="DEAD_LETTER",
                 )
                 self._store.insert_audit(conn, audit)
                 self._store.enqueue_review(
@@ -203,11 +199,21 @@ class RecheckRunner:
                         order_id=order_id,
                         reason="dead_letter",
                         event_id=decision.audit.event_id,
-                        details={"retry_count": retry_count, "last_reason": decision.reason},
+                        details={
+                            "retry_count": retry_count,
+                            "last_reason": decision.reason,
+                            "last_review_reason": (
+                                decision.review.reason if decision.review else None
+                            ),
+                        },
                     ),
                 )
                 return _Outcome()
-            self._store.insert_audit(conn, decision.audit)
+            # Re-armed: record the transition that actually happened. For
+            # ARM_RECHECK the audit already says PENDING_RECHECK; for
+            # FLAG_FOR_REVIEW its new_state is still the old PROCESSING.
+            audit = dataclasses.replace(decision.audit, new_state="PENDING_RECHECK")
+            self._store.insert_audit(conn, audit)
             return _Outcome(rearm_at=fresh)
 
         # decide() does not produce NO_OP / LOCKED_REPLAY_IGNORED for a
