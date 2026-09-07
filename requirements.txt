@@ -13,3 +13,6 @@ confluent-kafka>=2.5
 # Postgres
 psycopg[binary]>=3.2
 psycopg-pool>=3.2
+
+# Redis (worker idempotency pre-filter + recheck delay queue)
+redis>=5.0

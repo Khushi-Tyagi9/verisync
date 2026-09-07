@@ -69,7 +69,11 @@ CREATE TABLE audit_log (
     sub_entity_type TEXT,          -- e.g. 'payment' | 'refund' | 'dispute' | 'settlement'
     sub_entity_id   TEXT,          -- e.g. refund_id / dispute_id
 
-    source          TEXT NOT NULL CHECK (source IN ('razorpay', 'merchant')),
+    -- 'system' covers audit rows written by the worker's own actions: recheck
+    -- resolutions, sweep reclaims, dead-lettering. They are decisions too.
+    source          TEXT NOT NULL
+                    CONSTRAINT audit_log_source_check
+                    CHECK (source IN ('razorpay', 'merchant', 'system')),
     event_type      TEXT NOT NULL, -- raw lifecycle event name, e.g. 'payment.captured'
 
     old_state       TEXT,

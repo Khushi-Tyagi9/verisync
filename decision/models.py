@@ -17,6 +17,7 @@ from typing import Any, Mapping, Optional
 class Source(str, Enum):
     RAZORPAY = "razorpay"
     MERCHANT = "merchant"
+    SYSTEM = "system"      # the worker's own actions: recheck resolution, sweeps
 
 
 class PaymentStatus(str, Enum):
