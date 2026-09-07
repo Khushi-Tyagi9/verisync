@@ -38,6 +38,7 @@
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); }
   .dot.stale { background: var(--bad); }
 
+  .warnbar { background: var(--bad-bg); color: var(--bad); border: 1px solid var(--bad); border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; font-size: 13px; font-weight: 600; }
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 22px; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
   .card .n { font-size: 26px; font-weight: 680; letter-spacing: -0.02em; }
@@ -95,6 +96,8 @@
     <span class="sub">real-time reconciliation &middot; Razorpay vs merchant record</span>
     <span class="live"><span class="dot" id="dot"></span><span id="livetext">connecting&hellip;</span></span>
   </header>
+
+  <div class="warnbar" id="orphanWarn" hidden></div>
 
   <div class="cards" id="cards"></div>
 
@@ -219,6 +222,13 @@ async function tick() {
     if (!res.ok) throw new Error(res.status);
     const s = await res.json();
     renderCards(s.orders);
+    const orphans = s.orders.orphan_pointers || 0;
+    const warn = document.getElementById("orphanWarn");
+    warn.hidden = orphans === 0;
+    if (orphans) {
+      warn.textContent = `${orphans} orders_state row(s) have no order_views row — `
+        + `something wrote the pointer outside the consumer. This should be 0.`;
+    }
     renderReview(s.review_queue);
     document.getElementById("oos").textContent = s.out_of_scope.total ?? 0;
     renderFeed(s.activity || []);

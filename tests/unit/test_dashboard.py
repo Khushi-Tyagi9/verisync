@@ -13,6 +13,7 @@ def _summary(**over):
     base = dict(
         status_counts={},
         orders_tracked=0,
+        orphan_pointers=0,
         review_open_by_reason={},
         review_recent=[],
         out_of_scope_total=0,
@@ -64,6 +65,17 @@ def test_outcome_rollups():
 def test_no_action_needed_never_negative():
     s = _summary(status_counts={"DISPUTED": 10}, orders_tracked=3)
     assert s["orders"]["no_action_needed"] == 0
+
+
+def test_orphan_pointers_is_surfaced_not_hidden():
+    # An orders_state row with no order_views row is reported as a number, so a
+    # broken invariant is visible instead of clamped away.
+    s = _summary(status_counts={"DEAD_LETTER": 1}, orders_tracked=0, orphan_pointers=1)
+    assert s["orders"]["orphan_pointers"] == 1
+    assert s["orders"]["no_action_needed"] == 0  # still clamped, but the orphan shows
+
+    clean = _summary(status_counts={"DEAD_LETTER": 1}, orders_tracked=1, orphan_pointers=0)
+    assert clean["orders"]["orphan_pointers"] == 0
 
 
 def test_review_open_is_sum_of_reasons_and_kept_separate_from_oos():

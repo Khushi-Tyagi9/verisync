@@ -19,6 +19,7 @@ def assemble_summary(
     *,
     status_counts: dict[str, int],
     orders_tracked: int,
+    orphan_pointers: int,
     review_open_by_reason: dict[str, int],
     review_recent: list[dict],
     out_of_scope_total: int,
@@ -41,6 +42,11 @@ def assemble_summary(
             "with_pointer": pointer_total,
             # ...and how many never needed a reconciliation action.
             "no_action_needed": max(int(orders_tracked) - pointer_total, 0),
+            # An orders_state row with no order_views row. apply() writes both in
+            # one transaction and the recheck/sweep paths only ever UPDATE
+            # existing rows, so this is 0 in normal operation; a non-zero value
+            # means something wrote orders_state outside the consumer.
+            "orphan_pointers": int(orphan_pointers),
             "by_status": by_status,
             "auto_corrected": by_status["RESOLVED_AUTOCORRECTED"],
             "resolved_naturally": by_status["RESOLVED_NATURALLY"],
@@ -74,6 +80,11 @@ def _iso(value) -> Optional[str]:
 
 _SQL_STATUS_COUNTS = "SELECT status, count(*) FROM orders_state GROUP BY status"
 _SQL_ORDERS_TRACKED = "SELECT count(*) FROM order_views"
+_SQL_ORPHAN_POINTERS = """
+    SELECT count(*) FROM orders_state s
+    LEFT JOIN order_views v USING (order_id)
+    WHERE v.order_id IS NULL
+"""
 _SQL_REVIEW_OPEN = (
     "SELECT reason, count(*) FROM review_queue WHERE status = 'OPEN' GROUP BY reason"
 )
@@ -98,6 +109,7 @@ _SQL_ACTIVITY = """
 def build_summary(conn, *, activity_limit: int = 30) -> dict:
     status_counts = _counts(conn.execute(_SQL_STATUS_COUNTS).fetchall())
     orders_tracked = conn.execute(_SQL_ORDERS_TRACKED).fetchone()[0]
+    orphan_pointers = conn.execute(_SQL_ORPHAN_POINTERS).fetchone()[0]
     review_open = _counts(conn.execute(_SQL_REVIEW_OPEN).fetchall())
     oos_total = conn.execute(_SQL_OOS_TOTAL).fetchone()[0]
     decision_counts = _counts(conn.execute(_SQL_DECISIONS).fetchall())
@@ -130,6 +142,7 @@ def build_summary(conn, *, activity_limit: int = 30) -> dict:
     return assemble_summary(
         status_counts=status_counts,
         orders_tracked=orders_tracked,
+        orphan_pointers=orphan_pointers,
         review_open_by_reason=review_open,
         review_recent=review_recent,
         out_of_scope_total=oos_total,
