@@ -173,4 +173,31 @@ CREATE INDEX idx_review_queue_open
     ON review_queue (created_at)
     WHERE status = 'OPEN';
 
+-- ---------------------------------------------------------------------------
+-- merchant_orders — the Phase 5 simulator's own order table
+-- ---------------------------------------------------------------------------
+-- Not part of the reconciliation pipeline. The simulated merchant service owns
+-- this table and updates it imperfectly on purpose: 'immediate' and 'lagging'
+-- orders eventually reach 'paid', 'stuck' orders acknowledge the order but
+-- never pay it, 'silent' orders never produce any event at all. It publishes
+-- merchant-side events onto the same order-lifecycle-events topic.
+CREATE TABLE merchant_orders (
+    order_id       TEXT PRIMARY KEY,
+    status         TEXT NOT NULL DEFAULT 'pending'
+                   CHECK (status IN ('pending', 'paid', 'failed', 'cancelled', 'refunded')),
+    amount         BIGINT,
+    currency       TEXT,
+    profile        TEXT NOT NULL
+                   CHECK (profile IN ('immediate', 'lagging', 'stuck', 'silent')),
+    -- when the next transition (pending -> paid) is due; NULL when nothing is
+    -- pending for this order (already paid, or a stuck/silent order).
+    next_action_at TIMESTAMPTZ,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_merchant_orders_due
+    ON merchant_orders (next_action_at)
+    WHERE next_action_at IS NOT NULL;
+
 COMMIT;
