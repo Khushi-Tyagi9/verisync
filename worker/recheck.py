@@ -96,13 +96,16 @@ class RecheckRunner:
         due = self._dq.due(now)
         for order_id in due:
             try:
-                self._resolve(order_id, now)
+                self.resolve_order(order_id, now)
             except Exception:
                 log.exception("recheck failed for %s; leaving it for the sweep", order_id)
         return len(due)
 
     # ------------------------------------------------------------------ #
-    def _resolve(self, order_id: str, now: datetime) -> None:
+    def resolve_order(self, order_id: str, now: datetime) -> None:
+        """Claim, re-fetch, re-evaluate, and complete one armed recheck. The
+        same path for the fast queue and the Postgres fallback sweep, so both
+        go through the identical atomic claim and token-verified completion."""
         with self._store.connection() as conn:
             token = self._store.claim_recheck(conn, order_id)
         if token is None:

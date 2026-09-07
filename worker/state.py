@@ -172,6 +172,36 @@ _REARM_OR_DEADLETTER = """
     RETURNING status, retry_count
 """
 
+# Fallback PENDING_RECHECK sweep: armed rechecks whose Redis push was lost to a
+# crash. The grace period keeps it clear of rechecks the fast runner is about to
+# handle. Uses idx_orders_state_pending_recheck.
+_LIST_ORPHANED_PENDING = """
+    SELECT order_id FROM orders_state
+    WHERE status = 'PENDING_RECHECK'
+      AND recheck_at IS NOT NULL
+      AND recheck_at < NOW() - make_interval(secs => %(grace_seconds)s)
+    ORDER BY recheck_at
+    LIMIT %(limit)s
+"""
+
+# Stuck-PROCESSING recovery: a worker claimed a row and never finished (crashed
+# past the watchdog). Reclaim to PENDING_RECHECK, clearing claim_token so the
+# dead worker's token can never match a future claim, and increment retry_count
+# in the same statement. At the ceiling, route to DEAD_LETTER instead of
+# reclaiming again. Uses idx_orders_state_stuck_processing.
+_RECLAIM_STUCK_PROCESSING = """
+    UPDATE orders_state
+    SET status = CASE WHEN retry_count + 1 >= %(max_retries)s
+                      THEN 'DEAD_LETTER' ELSE 'PENDING_RECHECK' END,
+        retry_count = retry_count + 1,
+        claim_token = NULL,
+        updated_at = NOW()
+    WHERE status = 'PROCESSING'
+      AND updated_at < NOW() - make_interval(secs => %(timeout_seconds)s)
+      AND retry_count < %(max_retries)s
+    RETURNING order_id, status, retry_count
+"""
+
 
 def _json(value):
     from psycopg.types.json import Json
@@ -359,6 +389,27 @@ class PostgresStateStore:
 
     def enqueue_review(self, conn, review: ReviewItem) -> None:
         self._enqueue_review(conn, review)
+
+    # ------------------------------------------------------------------ #
+    # Sweeps (worker/sweep.py)
+    # ------------------------------------------------------------------ #
+    def list_orphaned_pending(self, conn, *, grace_seconds: int, limit: int = 500) -> list[str]:
+        rows = conn.execute(
+            _LIST_ORPHANED_PENDING, {"grace_seconds": grace_seconds, "limit": limit}
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    def reclaim_stuck_processing(
+        self, conn, *, timeout_seconds: int, max_retries: int
+    ) -> list[tuple[str, str, int]]:
+        """Reclaim every PROCESSING row past the watchdog timeout in one
+        statement. Returns (order_id, new_status, retry_count) per reclaimed
+        row so the caller can audit and, for DEAD_LETTER rows, raise review."""
+        rows = conn.execute(
+            _RECLAIM_STUCK_PROCESSING,
+            {"timeout_seconds": timeout_seconds, "max_retries": max_retries},
+        ).fetchall()
+        return [(r[0], r[1], r[2]) for r in rows]
 
     def close(self) -> None:
         try:
