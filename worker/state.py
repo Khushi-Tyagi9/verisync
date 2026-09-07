@@ -390,6 +390,13 @@ class PostgresStateStore:
     def enqueue_review(self, conn, review: ReviewItem) -> None:
         self._enqueue_review(conn, review)
 
+    def record_review(self, review: ReviewItem) -> None:
+        """File one review_queue row in its own short transaction. For callers
+        (the consumer's malformed-message path) with no other DB work to batch
+        into the same transaction."""
+        with self._pool.connection() as conn:
+            self._enqueue_review(conn, review)
+
     # ------------------------------------------------------------------ #
     # Sweeps (worker/sweep.py)
     # ------------------------------------------------------------------ #

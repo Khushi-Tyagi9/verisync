@@ -27,7 +27,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from decision.engine import evaluate
-from decision.models import Action, ReconStatus
+from decision.models import Action, ReconStatus, ReviewItem
 
 from .config import WorkerSettings, load_settings
 from .delayqueue import RedisDelayQueue
@@ -168,17 +168,26 @@ class ReconciliationWorker:
             envelope = json.loads(msg.value())
         except (json.JSONDecodeError, TypeError) as exc:
             log.error(
-                "undeserializable message at %s[%s]@%s: %s; skipping",
+                "undeserializable message at %s[%s]@%s: %s; routing to review_queue",
                 msg.topic(), msg.partition(), msg.offset(), exc,
+            )
+            self._record_malformed(
+                msg, reason="undeserializable_envelope", extra={"error": str(exc)}
             )
             return True
 
         event = envelope_to_event(envelope)
         if event is None:
             log.error(
-                "unusable envelope at %s[%s]@%s: %r; skipping",
+                "unusable envelope at %s[%s]@%s: %r; routing to review_queue",
                 msg.topic(), msg.partition(), msg.offset(),
                 _truncate(msg.value()),
+            )
+            self._record_malformed(
+                msg,
+                reason="unusable_envelope",
+                order_id=_str_or_none(envelope.get("order_id")) if isinstance(envelope, dict) else None,
+                event_id=_str_or_none(envelope.get("event_id")) if isinstance(envelope, dict) else None,
             )
             return True
 
@@ -233,6 +242,38 @@ class ReconciliationWorker:
         )
         return True
 
+    def _record_malformed(
+        self,
+        msg,
+        *,
+        reason: str,
+        order_id: Optional[str] = None,
+        event_id: Optional[str] = None,
+        extra: Optional[dict] = None,
+    ) -> None:
+        """File one review_queue row for a message the worker cannot process,
+        so a malformed payload is queryable later instead of silently committed
+        past. A stable synthetic event_id from topic/partition/offset lets a
+        redelivery of the same physical record dedupe via the review_queue
+        partial unique index."""
+        details = {
+            "topic": msg.topic(),
+            "partition": msg.partition(),
+            "offset": msg.offset(),
+            "raw": _truncate(msg.value(), 1000),
+        }
+        if extra:
+            details.update(extra)
+        synthetic_id = f"malformed:{msg.topic()}:{msg.partition()}:{msg.offset()}"
+        self._store.record_review(
+            ReviewItem(
+                order_id=order_id,
+                reason=reason,
+                event_id=event_id or synthetic_id,
+                details=details,
+            )
+        )
+
     def close(self) -> None:
         # idempotency filter and delay queue share self._redis; close it once.
         for name, obj in (
@@ -251,6 +292,10 @@ class ReconciliationWorker:
 def _truncate(value: Any, limit: int = 200) -> str:
     text = value.decode("utf-8", "replace") if isinstance(value, bytes) else str(value)
     return text if len(text) <= limit else text[:limit] + "..."
+
+
+def _str_or_none(value: Any) -> Optional[str]:
+    return value if isinstance(value, str) and value.strip() else None
 
 
 def main() -> int:
