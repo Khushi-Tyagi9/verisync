@@ -1,10 +1,18 @@
 """Kafka consumer for the reconciliation worker.
 
-Connection shell + poll loop. Offsets are committed manually and only after a
-successful Postgres write (``enable.auto.commit=False``); until the decision
-write path lands in the next step this loop deliberately does not commit, so a
-worker started now re-reads from its last committed offset on every restart
-rather than silently advancing past unprocessed events.
+For each lifecycle event, in order per partition:
+
+1. Deserialize the envelope and normalize it to a ``decision.Event``.
+2. Fast pre-filter: skip if the Redis idempotency key already exists.
+3. In one Postgres transaction: read current state (``orders_state`` +
+   ``order_views``), run the pure decision logic, insert the ``audit_log`` row
+   (``ON CONFLICT (event_id) DO NOTHING`` -- the authoritative idempotency
+   layer), persist the projected view, and apply the pointer effect.
+4. Only after that transaction commits: set the Redis pre-filter key, then
+   manually commit the Kafka offset.
+
+Offsets are never committed before the write (``enable.auto.commit=False``), so
+a crash produces at-least-once redelivery that the idempotency layers absorb.
 
 Run it with:  python -m worker.consumer
 """
@@ -14,14 +22,20 @@ from __future__ import annotations
 import json
 import logging
 import signal
+import time
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+from decision.engine import evaluate
+from decision.models import ReconStatus
+
 from .config import WorkerSettings, load_settings
+from .idempotency import RedisIdempotencyFilter
+from .normalize import envelope_to_event
+from .state import PostgresStateStore
 
 log = logging.getLogger("verisync.worker")
 
-# confluent_kafka error code for "reached end of partition"; informational, not
-# a failure, and only delivered when explicitly enabled.
 _PARTITION_EOF = -191
 
 
@@ -35,18 +49,9 @@ def build_consumer(settings: WorkerSettings):
             "group.id": settings.consumer_group,
             "enable.auto.commit": False,
             "auto.offset.reset": "earliest",
-            # Per-partition order already holds across rebalances; we never seek.
             "enable.partition.eof": False,
             "client.id": "verisync-worker",
         }
-    )
-
-
-def build_pool(settings: WorkerSettings):
-    from psycopg_pool import ConnectionPool
-
-    return ConnectionPool(
-        settings.postgres_dsn, min_size=1, max_size=4, open=True, timeout=10
     )
 
 
@@ -61,23 +66,28 @@ class ReconciliationWorker:
         self,
         *,
         consumer,
-        pool,
-        redis_client,
+        store: PostgresStateStore,
+        idempotency: RedisIdempotencyFilter,
         settings: WorkerSettings,
     ) -> None:
         self._consumer = consumer
-        self._pool = pool
-        self._redis = redis_client
+        self._store = store
+        self._idem = idempotency
         self._settings = settings
+        self._recheck_delay = timedelta(seconds=settings.recheck_delay_seconds)
         self._stopping = False
 
     @classmethod
-    def from_settings(cls, settings: Optional[WorkerSettings] = None) -> "ReconciliationWorker":
+    def from_settings(
+        cls, settings: Optional[WorkerSettings] = None
+    ) -> "ReconciliationWorker":
         settings = settings or load_settings()
         return cls(
             consumer=build_consumer(settings),
-            pool=build_pool(settings),
-            redis_client=build_redis(settings),
+            store=PostgresStateStore.from_settings(settings),
+            idempotency=RedisIdempotencyFilter(
+                build_redis(settings), ttl_seconds=settings.idempotency_ttl_seconds
+            ),
             settings=settings,
         )
 
@@ -105,49 +115,117 @@ class ReconciliationWorker:
                         continue
                     log.error("consume error: %s", err)
                     continue
-                self._handle_message(msg)
+                if self._handle_message(msg):
+                    self._consumer.commit(message=msg, asynchronous=False)
         finally:
             self.close()
+
+    def run_until_idle(self, *, idle_seconds: float = 3.0, max_seconds: float = 30.0) -> int:
+        """Consume until no message arrives for ``idle_seconds`` (or after
+        ``max_seconds`` total), then shut down cleanly. For the Phase 4
+        checkpoint scripts and integration tests, not for production."""
+        self._consumer.subscribe([self._settings.lifecycle_topic])
+        processed = 0
+        start = last_seen = time.monotonic()
+        try:
+            while not self._stopping:
+                msg = self._consumer.poll(1.0)
+                clock = time.monotonic()
+                if clock - start > max_seconds:
+                    break
+                if msg is None:
+                    if clock - last_seen > idle_seconds:
+                        break
+                    continue
+                err = msg.error()
+                if err is not None:
+                    if err.code() != _PARTITION_EOF:
+                        log.error("consume error: %s", err)
+                    continue
+                last_seen = clock
+                if self._handle_message(msg):
+                    self._consumer.commit(message=msg, asynchronous=False)
+                    processed += 1
+        finally:
+            self.close()
+        return processed
 
     def _handle_message(self, msg) -> bool:
         """Process one message. Returns True when the offset is safe to commit.
 
-        The decision write path is added in the next step; for now this only
-        parses the envelope and logs it, and never reports the offset as
-        committable.
+        Unexpected errors propagate: the worker stops and, because the offset
+        was not committed, the message is redelivered on restart.
         """
         try:
             envelope = json.loads(msg.value())
         except (json.JSONDecodeError, TypeError) as exc:
-            # A poison record: nothing downstream can use it. Log loudly and
-            # skip; the real dead-letter routing arrives with the worker's DB
-            # path. Returning False leaves the offset uncommitted for now.
-            log.error("undeserializable message at %s[%s]: %s", msg.topic(), msg.partition(), exc)
-            return False
+            log.error(
+                "undeserializable message at %s[%s]@%s: %s; skipping",
+                msg.topic(), msg.partition(), msg.offset(), exc,
+            )
+            return True
 
+        event = envelope_to_event(envelope)
+        if event is None:
+            log.error(
+                "unusable envelope at %s[%s]@%s: %r; skipping",
+                msg.topic(), msg.partition(), msg.offset(),
+                _truncate(msg.value()),
+            )
+            return True
+
+        if self._idem.seen(event.event_id):
+            log.debug("pre-filter hit, skipping %s", event.event_id)
+            return True
+
+        now = datetime.now(timezone.utc)
+        with self._store.connection() as conn:
+            state = self._store.read_state(conn, event.order_id)
+            current_status = (
+                ReconStatus(state.row.status) if state.row is not None else None
+            )
+            evaluation = evaluate(
+                event=event,
+                view=state.view,
+                current_status=current_status,
+                now=now,
+                recheck_delay=self._recheck_delay,
+            )
+            result = self._store.apply(
+                conn,
+                event=event,
+                decision=evaluation.decision,
+                projected_view=evaluation.view,
+                prior_row=state.row,
+            )
+
+        self._idem.mark_seen(event.event_id)
         log.info(
-            "event %s order=%s type=%s source=%s",
-            _get(envelope, "event_id"),
-            _get(envelope, "order_id"),
-            _get(envelope, "event_type"),
-            _get(envelope, "source"),
+            "event %s order=%s type=%s -> %s%s%s",
+            event.event_id,
+            event.order_id,
+            event.event_type,
+            evaluation.decision.action.value,
+            "" if result.audit_written else " (replay, audit already present)",
+            "" if result.pointer_moved or not result.audit_written else " (pointer unchanged)",
         )
-        return False
+        return True
 
     def close(self) -> None:
-        for name, obj, closer in (
-            ("consumer", self._consumer, lambda o: o.close()),
-            ("pool", self._pool, lambda o: o.close()),
-            ("redis", self._redis, lambda o: o.close()),
+        for name, obj in (
+            ("consumer", self._consumer),
+            ("store", self._store),
+            ("idempotency", self._idem),
         ):
             try:
-                closer(obj)
-            except Exception as exc:  # best-effort teardown
+                obj.close()
+            except Exception as exc:
                 log.warning("error closing %s: %s", name, exc)
 
 
-def _get(envelope: Any, key: str) -> Any:
-    return envelope.get(key) if isinstance(envelope, dict) else None
+def _truncate(value: Any, limit: int = 200) -> str:
+    text = value.decode("utf-8", "replace") if isinstance(value, bytes) else str(value)
+    return text if len(text) <= limit else text[:limit] + "..."
 
 
 def main() -> int:
