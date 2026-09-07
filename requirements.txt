@@ -1,0 +1,15 @@
+# Runtime dependencies.
+#
+# decision/ (Phase 2) is pure stdlib and needs nothing here. Everything below
+# is for the ingestion service (Phase 3) and the worker (Phase 4+).
+
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-dotenv>=1.0
+
+# Kafka / Redpanda client
+confluent-kafka>=2.5
+
+# Postgres
+psycopg[binary]>=3.2
+psycopg-pool>=3.2
