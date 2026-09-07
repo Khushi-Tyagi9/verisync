@@ -52,6 +52,22 @@ CREATE INDEX idx_orders_state_stuck_processing
     WHERE status = 'PROCESSING';
 
 -- ---------------------------------------------------------------------------
+-- order_views — accumulated per-order projection (every order that has ever
+-- produced an event), kept separate from orders_state.
+-- ---------------------------------------------------------------------------
+-- orders_state is the reconciliation *pointer*: it only exists once an order
+-- has drift armed or a resolution. This table is the raw cross-event
+-- projection the pure decision layer folds each event into (razorpay status,
+-- merchant status, amounts, reversal ids). The worker persists it on every
+-- event, including non-actionable ones, so a merchant record that arrives
+-- before any Razorpay event is not lost by the time a recheck fires.
+CREATE TABLE order_views (
+    order_id    TEXT PRIMARY KEY,
+    view        JSONB NOT NULL,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ---------------------------------------------------------------------------
 -- audit_log — append-only source of truth
 -- ---------------------------------------------------------------------------
 CREATE TABLE audit_log (
