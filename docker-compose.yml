@@ -10,7 +10,7 @@ name: verisync
 #   Schema Registry        localhost:18081
 #   Redpanda Console (web) http://localhost:8080
 #   Postgres              localhost:15432  (verisync / verisync / verisync)
-#   Redis                 localhost:6379
+#   Redis                 localhost:16379  (host 16379 -> container 6379)
 #
 # Dev credentials are inlined on purpose so `docker compose up` just works for
 # the Phase 1 checkpoint. Real secrets arrive with .env in Phase 3.
@@ -67,7 +67,7 @@ services:
     # rewrite block writes with disk I/O on a resource-constrained laptop disk.
     command: redis-server --appendonly yes --appendfsync everysec --no-appendfsync-on-rewrite yes
     ports:
-      - "6379:6379"
+      - "16379:6379"  # host 16379 -> container 6379 (6379 is often taken by another local redis)
     volumes:
       - redis_data:/data
     healthcheck:
