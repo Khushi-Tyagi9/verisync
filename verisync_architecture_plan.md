@@ -108,6 +108,14 @@ Reads live from Postgres. Visually separates `out_of_scope_events` (a quiet stat
 
 Once the full pipeline works end to end against synthetic and simulated events, point Razorpay's test-mode webhook config at the ingestion endpoint (via ngrok locally). Use real test UPI identifiers to generate genuine signed events. At this point, only one new thing is being tested, real signatures and real network timing, not the core logic and the internet at the same time.
 
+**Outcome: attempted, deliberately stopped short of completion.** The reconciliation pipeline and the signature-verification code are built and tested against Razorpay's documented algorithm (raw-body HMAC-SHA256, correct capture-before-parse ordering), but connecting real Razorpay test-mode webhooks was blocked by account activation requiring bank-account verification via UPI, not by anything in this codebase. This was confirmed through multiple independent tests, not assumed from one failure:
+
+- The webhooks API (`POST /v1/webhooks`) rejected creation with `BAD_REQUEST_ERROR` / `"Invalid event name/names: 1"` across every event-name combination tried (`payment.captured`+`payment.failed`, `payment.captured`+`payment.authorized`, `payment.authorized`+`payment.failed`), which ruled out any single event name as the cause, while `GET /v1/webhooks` and `GET /v1/payments` on the same key succeeded, ruling out auth and general API access.
+- The Razorpay dashboard, attempting the identical webhook by hand, routes into bank-account-linking onboarding instead of completing the save, independently confirming an account-activation gate rather than an API-specific bug.
+- Two different tunnel domains, ngrok and zrok, both produced the identical rejection, ruling out the tunnel URL as the cause.
+
+This is a deliberate stopping point, not an unresolved bug: linking a real bank account to a test account is disproportionate to what this phase needed to prove, given the reconciliation logic is already independently verified through Phases 1 through 6, including a live chaos test (kill the worker mid-processing after it holds the claim, confirm the fencing token prevents double-execution and the sweep recovers the claim cleanly).
+
 ---
 
 ## State model summary
