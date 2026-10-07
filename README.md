@@ -29,16 +29,21 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    A[Incoming event] --> B{Correlate: order and amount match}
-    B -- No --> C[CORRELATION_FAILED]
-    B -- Yes --> D{Reversal on a settled order}
-    D -- Yes --> E[ROUTE_DISPUTED]
-    D -- No --> F{Unmapped status code}
-    F -- Yes --> G[Model proposes a category, UNCONFIRMED]
-    F -- No --> H{Compare status}
-    H -- Match --> I[No action]
-    H -- Safe drift --> J[Arm a recheck]
-    H -- Risky drift --> K[Flag for human review, never auto-corrected]
+    A[Incoming event] --> B{Order already terminal}
+    B -- Yes, reversal event --> C[ROUTE_DISPUTED]
+    B -- Yes, anything else --> D[Ignored: replay on a locked order]
+    B -- No --> E{Correlate: order_id, amount, currency, merchant record}
+    E -- Fails --> F[Flagged for human review]
+    E -- OK --> G{Compare gateway vs merchant status}
+    G -- Reversal on a settled order --> C
+    G -- Both sides agree --> H[No action needed]
+    G -- Gateway confirmed, merchant behind --> I[Arm a recheck]
+    G -- Merchant ahead, gateway behind --> F
+    I --> J[Recheck fires: re-run the same comparison]
+    J -- Resolved or caught up --> H
+    J -- Still ambiguous --> K{Worker retry ceiling reached}
+    K -- No --> I
+    K -- Yes --> L[Dead-lettered, routed to the review queue]
 ```
 
 ## The decision logic
@@ -50,12 +55,11 @@ flowchart TD
 | confirmed success | pending / behind | valid | safe drift | Arms a recheck, doesn't correct immediately |
 | confirmed success (at recheck) | still behind | valid | still drifting | Auto-corrected |
 | confirmed success (at recheck) | caught up on its own | valid | resolved naturally | No correction needed |
-| confirmed success (at recheck) | no merchant record ever seen | valid | ambiguous | Bounded re-arm, shares the same retry budget as other ambiguous cases, not treated as more severe |
+| confirmed success (at recheck) | no merchant record ever seen, or still ambiguous | valid | unresolved at recheck | Re-armed for another window rather than guessed at, bounded by a shared retry budget; once the ceiling is reached, dead-lettered and routed to the review queue instead of retried forever |
 | confirmed failure | success | valid | risky drift | Flagged for human review only, never auto-corrected, this direction could mean fraud, not lag |
 | reversal or chargeback | on an already-settled order | valid | disputed | Routes to a disputed state, breaks the terminal lock, never re-disputes an order already there |
-| any | any | unmapped status code | unconfirmed | A model proposes a category for review, the proposal is logged and never acted on automatically |
 
-Every comparison, correction, and gate above the last row is deterministic Python. The only model call anywhere in the system is that last row, and its output is never load-bearing.
+Every comparison, correction, and gate in this table is deterministic Python. The decision layer makes no network calls and has no third-party dependencies at all, a dedicated test fails the build if it ever imports one.
 
 ## What makes this safe under real failure conditions
 
@@ -88,4 +92,4 @@ Real gateway test-mode webhooks were genuinely attempted, not skipped. Connectin
 
 ## Tech stack
 
-Python, Redpanda (Kafka-API-compatible), PostgreSQL, Redis, FastAPI, a small LLM call for the one narrow classification case, Docker Compose for local infrastructure.
+Python, Redpanda (Kafka-API-compatible), PostgreSQL, Redis, FastAPI, Docker Compose for local infrastructure.
