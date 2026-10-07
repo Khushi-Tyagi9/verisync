@@ -13,8 +13,16 @@ from typing import Optional
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from .config import DashboardSettings, load_settings
-from .queries import build_summary
+try:
+    from .config import DashboardSettings, load_settings
+    from .queries import build_summary
+except ImportError:
+    # Vercel's Python runtime loads this file as a standalone module with no
+    # package context, so the relative imports above fail there. config.py
+    # and queries.py sit as siblings to this file in both cases, so the
+    # absolute form resolves the same modules when run that way.
+    from config import DashboardSettings, load_settings
+    from queries import build_summary
 
 _INDEX_HTML = (Path(__file__).parent / "index.html").read_text(encoding="utf-8")
 
