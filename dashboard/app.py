@@ -64,7 +64,7 @@ def create_app(
 
     return app
 
-
+app = create_app()
 def main() -> int:
     import uvicorn
 
