@@ -1,0 +1,13 @@
+# Runtime dependencies for the dashboard app.
+#
+# Vercel's Root Directory for this project is "dashboard", so this is the
+# requirements.txt Vercel's Python build actually installs from. Version
+# pins match requirements.txt at the repo root.
+
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-dotenv>=1.0
+
+# Postgres
+psycopg[binary]>=3.2
+psycopg-pool>=3.2
