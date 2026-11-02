@@ -13,9 +13,10 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 try:
     from .config import DashboardSettings, load_settings
@@ -140,6 +141,34 @@ def create_app(
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
         return page
+
+    @app.post("/api/reconcile")
+    async def reconcile_endpoint(request: Request):
+        """Stateless: parse the two exports in the body and return verdicts.
+        Always on. Touches no database, stores nothing, logs nothing."""
+        from reconcile_tool.api import MAX_BODY_BYTES, handle_reconcile
+
+        too_big = JSONResponse(
+            {"error": f"Request body is larger than {MAX_BODY_BYTES // (1024 * 1024)} MB."},
+            status_code=413,
+        )
+        declared = request.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > MAX_BODY_BYTES:
+            return too_big
+        chunks, size = [], 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > MAX_BODY_BYTES:
+                return too_big
+            chunks.append(chunk)
+        status, payload = await run_in_threadpool(handle_reconcile, b"".join(chunks))
+        return JSONResponse(payload, status_code=status)
+
+    @app.get("/api/reconcile/sample")
+    def reconcile_sample():
+        from reconcile_tool.api import sample_data
+
+        return sample_data()
 
     @app.get("/health")
     def health() -> dict:
