@@ -29,7 +29,8 @@ CASES = [
     ("captured_and_paid", "A,captured,100,INR,,,\n", "A,paid,100,INR,\n", Verdict.CONSISTENT),
     ("captured_merchant_pending", "A,captured,100,INR,,,\n", "A,pending,,,\n", Verdict.AUTO_CORRECT),
     ("captured_merchant_failed", "A,captured,100,INR,,,\n", "A,failed,,,\n", Verdict.AUTO_CORRECT),
-    ("captured_merchant_cancelled", "A,captured,100,INR,,,\n", "A,cancelled,,,\n", Verdict.AUTO_CORRECT),
+    ("captured_merchant_cancelled", "A,captured,100,INR,,,\n", "A,cancelled,,,\n", Verdict.FLAGGED_RISKY),
+    ("captured_merchant_refunded", "A,captured,100,INR,,,\n", "A,refunded,,,\n", Verdict.DISPUTED),
     ("captured_no_merchant_record", "A,captured,100,INR,,,\n", "", Verdict.UNRESOLVED),
     ("failed_merchant_paid", "A,failed,100,INR,,,\n", "A,paid,100,INR,\n", Verdict.FLAGGED_RISKY),
     ("failed_merchant_pending", "A,failed,100,INR,,,\n", "A,pending,,,\n", Verdict.CONSISTENT),
@@ -198,3 +199,18 @@ def test_golden_sample_invalid_rows():
 def test_every_result_serializes_to_json():
     _, _, results = _sample()
     json.dumps([{**r.__dict__, "verdict": r.verdict.value} for r in results])
+
+
+def test_merchant_cancelled_is_flagged_risky_with_an_honest_reason_and_no_mark_paid():
+    r = run("A,captured,100,INR,,,\n", "A,cancelled,,,\n")["A"]
+    assert r.verdict is Verdict.FLAGGED_RISKY
+    assert r.action_code == "review" and "mark the merchant order as paid" not in r.recommended_action
+    assert "cancelled" in r.reason and "failed" not in r.reason
+
+
+def test_merchant_refunded_is_disputed_explicitly():
+    r = run("A,captured,100,INR,,,\n", "A,refunded,,,\n")["A"]
+    assert r.verdict is Verdict.DISPUTED
+    assert r.verdict is not Verdict.AUTO_CORRECT
+    assert r.action_code == "review"
+    assert "refunded" in r.reason and "gateway has not recorded a refund" in r.reason

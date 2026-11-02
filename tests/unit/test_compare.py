@@ -76,3 +76,21 @@ def test_assessment_carries_both_observed_statuses():
     d = assess(_view(razorpay_status=PaymentStatus.FAILED, merchant_status=MerchantOrderStatus.PAID))
     assert d.razorpay_status is PaymentStatus.FAILED
     assert d.merchant_status is MerchantOrderStatus.PAID
+
+
+def test_captured_vs_cancelled_is_unsafe_not_safe():
+    d = assess(_view(razorpay_status=PaymentStatus.CAPTURED, merchant_status=MerchantOrderStatus.CANCELLED))
+    assert d.kind is DriftKind.UNSAFE
+    assert d.kind is not DriftKind.SAFE
+
+
+def test_captured_vs_refunded_is_a_reversal_not_safe():
+    d = assess(_view(razorpay_status=PaymentStatus.CAPTURED, merchant_status=MerchantOrderStatus.REFUNDED))
+    assert d.kind is DriftKind.REVERSAL
+    assert d.kind is not DriftKind.SAFE
+
+
+def test_captured_vs_failed_and_pending_are_still_safe_drift():
+    for status in (MerchantOrderStatus.FAILED, MerchantOrderStatus.PENDING):
+        d = assess(_view(razorpay_status=PaymentStatus.CAPTURED, merchant_status=status))
+        assert d.kind is DriftKind.SAFE, status

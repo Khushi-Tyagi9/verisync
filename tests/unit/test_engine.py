@@ -137,3 +137,39 @@ def test_projected_view_is_returned_for_persistence(make_event, now):
 
     assert out.view.razorpay_status is PaymentStatus.CAPTURED
     assert rp.event_id in out.view.seen_event_ids
+
+
+def _captured_then_merchant(make_event, now, merchant_status):
+    rp = make_event(event_type="payment.captured", payment_status=PaymentStatus.CAPTURED)
+    first = evaluate(event=rp, view=None, current_status=None, now=now)
+    merch = make_event(
+        source=Source.MERCHANT, event_type="order.updated",
+        merchant_status=merchant_status, payment_status=None,
+    )
+    return evaluate(event=merch, view=first.view, current_status=ReconStatus.PENDING_RECHECK, now=now)
+
+
+def test_merchant_cancelled_after_capture_is_flagged_never_auto_corrected(make_event, now):
+    step = _captured_then_merchant(make_event, now, MerchantOrderStatus.CANCELLED)
+    assert step.decision.action is Action.FLAG_FOR_REVIEW
+    assert step.decision.review.reason == "unsafe_drift"
+    assert step.decision.new_status is None
+
+
+def test_merchant_refunded_after_capture_is_routed_to_disputed(make_event, now):
+    step = _captured_then_merchant(make_event, now, MerchantOrderStatus.REFUNDED)
+    assert step.decision.action is Action.ROUTE_DISPUTED
+    assert step.decision.new_status is ReconStatus.DISPUTED
+
+
+def test_recheck_never_auto_corrects_a_cancelled_or_refunded_merchant(make_event, now):
+    for status, action in ((MerchantOrderStatus.CANCELLED, Action.APPLY_AUTOCORRECT),
+                           (MerchantOrderStatus.REFUNDED, Action.APPLY_AUTOCORRECT)):
+        rp = make_event(event_type="payment.captured", payment_status=PaymentStatus.CAPTURED)
+        view = evaluate(event=rp, view=None, current_status=None, now=now).view
+        merch = make_event(source=Source.MERCHANT, event_type="order.updated",
+                           merchant_status=status, payment_status=None)
+        view = evaluate(event=merch, view=view, current_status=None, now=now).view
+        recheck = evaluate(event=rp, view=view, current_status=ReconStatus.PROCESSING,
+                           now=now, require_merchant_record=True)
+        assert recheck.decision.action is not action, status

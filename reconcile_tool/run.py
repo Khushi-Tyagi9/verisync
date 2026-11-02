@@ -130,9 +130,16 @@ def _plain_reason(verdict: Verdict, *, gateway_status, merchant_status, has_gate
             return "The gateway captured the payment and the merchant shows it as paid."
         return "Neither side shows a successful payment, so there is nothing to reconcile."
     if verdict is Verdict.FLAGGED_RISKY:
+        if merchant_status == "cancelled":
+            return ("The gateway captured the payment, but the merchant cancelled the order. "
+                    "This is never auto-corrected; the customer may have been charged for a "
+                    "cancelled order.")
         return ("The merchant shows this order as paid, but the gateway says the payment failed. "
                 "This is never auto-corrected.")
     if verdict is Verdict.DISPUTED:
+        if merchant_status == "refunded" and gateway_status not in ("refunded", "disputed"):
+            return ("The merchant shows this order as refunded, but the gateway has not recorded "
+                    "a refund for it.")
         return "A refund or dispute was recorded against a settled payment."
     if verdict is Verdict.CORRELATION_FAILED:
         return f"Two records disagree and were rejected: {check_detail}."

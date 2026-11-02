@@ -43,6 +43,19 @@ def assess(view: OrderView) -> DriftAssessment:
     if rp is PaymentStatus.CAPTURED:
         if mc is MerchantOrderStatus.PAID:
             return out(DriftKind.NONE, "both sides show success")
+        # A merchant that cancelled or refunded an order Razorpay shows as
+        # captured did something deliberate. Marking it paid would undo that,
+        # so neither is the plain "merchant lags" drift.
+        if mc is MerchantOrderStatus.CANCELLED:
+            return out(
+                DriftKind.UNSAFE,
+                "razorpay captured, merchant cancelled the order; flag only",
+            )
+        if mc is MerchantOrderStatus.REFUNDED:
+            return out(
+                DriftKind.REVERSAL,
+                "razorpay captured, merchant shows the order refunded",
+            )
         return out(DriftKind.SAFE, f"razorpay captured, merchant shows {mc.value}")
 
     if rp is PaymentStatus.FAILED:
