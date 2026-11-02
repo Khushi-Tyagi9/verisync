@@ -3,208 +3,240 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta name="description" content="Match gateway payments against merchant orders and get recommended actions. Nothing is stored and no merchant system is changed." />
-<title>verisync · reconcile gateway payments with merchant orders</title>
+<meta name="description" content="Compare your payment gateway's records with your merchant's order records. Nothing is stored and no merchant system is changed." />
+<title>verisync · reconcile payments</title>
+<link rel="preload" href="/assets/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="stylesheet" href="/assets/app.css" />
 </head>
 <body data-poll-ms="__POLL_INTERVAL_MS__" data-live="__LIVE_MODE__">
 <a class="skip" href="#main">Skip to content</a>
-<div class="wrap">
-  <header class="masthead">
-    <h1 class="brand">veri<b>sync</b></h1>
-    <p class="tagline">Match what the gateway collected against what the merchant recorded.</p>
-    <div class="masthead-meta">
-      <!--SNAPSHOT_LABEL-->
-      <!--DEMO_CONTROL-->
+
+<header class="topbar">
+  <div class="container">
+    <div class="topbar-row">
+      <span class="wordmark">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="16" height="16" rx="4"/><path d="M6 8h8l-2.5-2.5M14 12H6l2.5 2.5"/></svg>
+        verisync
+      </span>
+      <div class="topbar-meta">
+        <!--SNAPSHOT_LABEL-->
+        <!--LIVE_BADGE-->
+        <!--DEMO_CONTROL-->
+      </div>
     </div>
-  </header>
-
-  <div class="notice" role="note">
-    <span><strong>Recommendations only.</strong> This tool suggests corrections. It does not change any merchant system, and your files are not stored.</span>
+    <div class="tabs" role="tablist" aria-label="Sections">
+      <button class="tab" role="tab" id="tab-reconcile" aria-controls="panel-reconcile" aria-selected="true">Reconcile</button>
+      <!--LIVE_TAB-->
+      <button class="tab" role="tab" id="tab-activity" aria-controls="panel-activity" aria-selected="false" tabindex="-1">System activity</button>
+    </div>
   </div>
-  <!--LIVE_BADGE-->
+</header>
 
-  <div class="tabs" role="tablist" aria-label="Sections">
-    <button class="tab" role="tab" id="tab-reconcile" aria-controls="panel-reconcile" aria-selected="true">Reconcile</button>
-    <!--LIVE_TAB-->
-    <button class="tab" role="tab" id="tab-activity" aria-controls="panel-activity" aria-selected="false" tabindex="-1">System activity</button>
-  </div>
+<main id="main" class="container">
+  <!-- ======================= Reconcile ======================= -->
+  <section class="tabpanel" role="tabpanel" id="panel-reconcile" aria-labelledby="tab-reconcile">
+    <div class="intro">
+      <h1 class="page-title">Reconcile payments</h1>
+      <p class="description">Compare your payment gateway's records with your merchant's order records, and see which orders match, which can be safely corrected, and which need a person to look.</p>
+      <p class="note" role="note">
+        <svg class="i" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/><path d="M8 7.2v3.8M8 5h.01" stroke-linecap="round"/></svg>
+        <span><strong>Recommendations only.</strong> This tool suggests corrections. It does not change any merchant system, and your files are not stored.</span>
+      </p>
 
-  <main id="main">
-    <!-- ======================= Reconcile ======================= -->
-    <section class="tabpanel" role="tabpanel" id="panel-reconcile" aria-labelledby="tab-reconcile">
-
-      <section class="step" aria-labelledby="s1">
-        <header>
-          <span class="stepno" aria-hidden="true">1</span>
-          <h2 id="s1">Provide your data</h2>
-          <p class="lede">Export your payments from the gateway and your orders from the store. Drop a file on each box, choose one, or paste CSV or JSON.</p>
-        </header>
-
-        <div class="toolbar">
-          <fieldset style="border:0;margin:0;padding:0;min-width:0">
-            <legend class="sr-only">Amount unit in your files</legend>
-            <div class="seg">
-              <label><input type="radio" name="unit" value="rupees" checked /><span>Rupees</span></label>
-              <label><input type="radio" name="unit" value="paise" /><span>Paise</span></label>
-            </div>
-          </fieldset>
-          <span class="sub" id="unitHelp">Amounts like 1200.50 mean rupees.</span>
-          <button type="button" class="btn" id="loadSample">Load sample data</button>
-          <span class="links">
-            <a href="#" id="tplGateway" download="verisync-gateway-template.csv">Gateway template (CSV)</a>
-            <a href="#" id="tplMerchant" download="verisync-merchant-template.csv">Merchant template (CSV)</a>
-          </span>
+      <details class="howto" id="howto">
+        <summary>How it works</summary>
+        <div class="howto-body">
+          <ol class="steps">
+            <li>Upload a gateway export and a merchant export (CSV or JSON), or load the sample.</li>
+            <li>Verisync matches orders by <code>order_id</code> and compares the two statuses and amounts.</li>
+            <li>Each order gets a verdict and a reason. Nothing is changed or stored.</li>
+          </ol>
+          <div class="tablewrap">
+            <table class="grid">
+              <caption class="sr-only">What each verdict means</caption>
+              <thead><tr><th scope="col">Verdict</th><th scope="col">What it means</th></tr></thead>
+              <tbody>
+                <tr><td><span class="pill v-AUTO_CORRECT">Safe to correct</span> <code>AUTO_CORRECT</code></td><td>The gateway captured the payment but the merchant record is behind (pending or failed), so marking the order paid is recommended.</td></tr>
+                <tr><td><span class="pill v-CONSISTENT">Matches</span> <code>CONSISTENT</code></td><td>Both records agree: paid on both sides, or unpaid on both sides.</td></tr>
+                <tr><td><span class="pill v-FLAGGED_RISKY">Risky</span> <code>FLAGGED_RISKY</code></td><td>The records conflict in a way that is never corrected automatically, such as a failed payment the merchant shows as paid.</td></tr>
+                <tr><td><span class="pill v-DISPUTED">Refund or dispute</span> <code>DISPUTED</code></td><td>A refund or dispute touches a payment that already settled, so a person has to handle it.</td></tr>
+                <tr><td><span class="pill v-CORRELATION_FAILED">Data conflict</span> <code>CORRELATION_FAILED</code></td><td>Two records for the same order disagree on amount or currency, so neither is trusted until the data is fixed.</td></tr>
+                <tr><td><span class="pill v-UNRESOLVED">Incomplete</span> <code>UNRESOLVED</code></td><td>One side is missing, or the gateway has no final outcome yet, so there is nothing safe to compare.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="rules"><strong>Gateway captured but merchant behind</strong> is treated as safe to correct. <strong>Gateway failed but merchant shows paid</strong> is always flagged for a person.</p>
         </div>
+      </details>
+    </div>
 
-        <div class="drops">
-          <section class="drop" id="dropGateway" aria-labelledby="hGateway">
+    <section aria-labelledby="hUpload">
+      <h2 class="label section-label" id="hUpload">Upload data</h2>
+      <div class="toolbar">
+        <fieldset style="border:0;margin:0;padding:0;min-width:0">
+          <legend class="sr-only">Amount unit in your files</legend>
+          <div class="seg">
+            <label><input type="radio" name="unit" value="rupees" checked /><span>Rupees</span></label>
+            <label><input type="radio" name="unit" value="paise" /><span>Paise</span></label>
+          </div>
+        </fieldset>
+        <span class="sub" id="unitHelp">Amounts like 1200.50 mean rupees.</span>
+        <button type="button" class="btn" id="loadSample">Load sample data</button>
+        <span class="links">
+          <a href="#" id="tplGateway" download="verisync-gateway-template.csv">Gateway template (CSV)</a>
+          <a href="#" id="tplMerchant" download="verisync-merchant-template.csv">Merchant template (CSV)</a>
+        </span>
+      </div>
+
+      <div class="uploads">
+        <section class="drop" id="dropGateway" aria-labelledby="hGateway">
+          <div class="drop-head">
             <h3 id="hGateway">Gateway export</h3>
+            <span class="meta" id="metaGateway" aria-live="polite">Empty</span>
+          </div>
+          <label class="sr-only" for="txtGateway">Gateway data (paste CSV or JSON)</label>
+          <textarea id="txtGateway" spellcheck="false" placeholder="Drop a file here, or paste CSV or JSON"></textarea>
+          <div class="drop-foot">
+            <button type="button" class="btn" data-pick="Gateway">Choose file</button>
+            <input type="file" id="fileGateway" accept=".csv,.json,.txt,text/csv,application/json,text/plain" hidden />
+            <button type="button" class="btn link" data-clear="Gateway">Clear</button>
             <p class="cols">Needs <code>order_id</code>, <code>status</code>, <code>amount</code>. Optional: currency, payment_id, refund_id, dispute_id, event_time.</p>
-            <label class="sr-only" for="txtGateway">Gateway data (paste CSV or JSON)</label>
-            <textarea id="txtGateway" spellcheck="false" placeholder="Drop a file here, or paste CSV / JSON"></textarea>
-            <div class="row">
-              <button type="button" class="btn" data-pick="Gateway">Choose file</button>
-              <input type="file" id="fileGateway" accept=".csv,.json,.txt,text/csv,application/json,text/plain" hidden />
-              <button type="button" class="btn link" data-clear="Gateway">Clear</button>
-              <span class="meta" id="metaGateway" aria-live="polite">Empty</span>
-            </div>
-          </section>
+          </div>
+        </section>
 
-          <section class="drop" id="dropMerchant" aria-labelledby="hMerchant">
+        <section class="drop" id="dropMerchant" aria-labelledby="hMerchant">
+          <div class="drop-head">
             <h3 id="hMerchant">Merchant orders</h3>
+            <span class="meta" id="metaMerchant" aria-live="polite">Empty</span>
+          </div>
+          <label class="sr-only" for="txtMerchant">Merchant data (paste CSV or JSON)</label>
+          <textarea id="txtMerchant" spellcheck="false" placeholder="Drop a file here, or paste CSV or JSON"></textarea>
+          <div class="drop-foot">
+            <button type="button" class="btn" data-pick="Merchant">Choose file</button>
+            <input type="file" id="fileMerchant" accept=".csv,.json,.txt,text/csv,application/json,text/plain" hidden />
+            <button type="button" class="btn link" data-clear="Merchant">Clear</button>
             <p class="cols">Needs <code>order_id</code>, <code>status</code>. Optional: amount, currency, event_time.</p>
-            <label class="sr-only" for="txtMerchant">Merchant data (paste CSV or JSON)</label>
-            <textarea id="txtMerchant" spellcheck="false" placeholder="Drop a file here, or paste CSV / JSON"></textarea>
-            <div class="row">
-              <button type="button" class="btn" data-pick="Merchant">Choose file</button>
-              <input type="file" id="fileMerchant" accept=".csv,.json,.txt,text/csv,application/json,text/plain" hidden />
-              <button type="button" class="btn link" data-clear="Merchant">Clear</button>
-              <span class="meta" id="metaMerchant" aria-live="polite">Empty</span>
-            </div>
-          </section>
-        </div>
+          </div>
+        </section>
+      </div>
 
-        <div class="runbar">
-          <button type="button" class="btn primary" id="run" disabled>Run reconciliation</button>
-          <span class="status" id="runStatus" role="status" aria-live="polite">Add both files to begin, or load the sample.</span>
-        </div>
-      </section>
+      <div class="runbar">
+        <button type="button" class="btn primary" id="run" disabled>Run</button>
+        <span class="status" id="runStatus" role="status" aria-live="polite">Add both files to begin, or load the sample.</span>
+      </div>
+    </section>
 
-      <section class="step" aria-labelledby="s2" id="results">
-        <header>
-          <span class="stepno" aria-hidden="true">2</span>
-          <h2 id="s2">Review the results</h2>
-          <p class="lede">Every order gets one verdict, a plain reason, and a recommended action. Open a row to see how the decision was reached.</p>
-        </header>
+    <section aria-labelledby="hResults" id="results">
+      <div class="results-head">
+        <h2 class="label" id="hResults">Results</h2>
+      </div>
 
-        <div id="resEmpty" class="empty">
-          <h3>No results yet</h3>
-          <p>Load the sample data to see every kind of verdict, or add your own two files and run.</p>
-        </div>
-        <div id="resLoading" class="skeleton" hidden aria-hidden="true">
-          <div class="bar" style="width:92%"></div><div class="bar" style="width:78%"></div><div class="bar" style="width:86%"></div><div class="bar" style="width:64%"></div>
-        </div>
-        <div id="resError" class="errorbox" role="alert" hidden></div>
+      <div id="resEmpty" class="state">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 13h6M10 17h6"/></svg>
+        <h3>No results yet</h3>
+        <p>Load the sample data to see every kind of verdict, or add your own two files and press Run.</p>
+      </div>
+      <div id="resLoading" class="skeleton" hidden aria-hidden="true">
+        <div class="bar" style="width:92%"></div><div class="bar" style="width:76%"></div><div class="bar" style="width:84%"></div><div class="bar" style="width:60%"></div>
+      </div>
+      <div id="resError" class="alert" role="alert" hidden></div>
 
-        <div id="resBody" hidden>
-          <div class="cards" id="cards"></div>
-          <details class="invalid" id="invalidBox" hidden>
-            <summary id="invalidSummary"></summary>
-            <table>
-              <thead><tr><th scope="col">File</th><th scope="col">Row</th><th scope="col">Order</th><th scope="col">Why it was skipped</th></tr></thead>
+      <div id="resBody" hidden>
+        <dl class="summary" id="cards"></dl>
+        <details class="disclosure" id="invalidBox" hidden>
+          <summary id="invalidSummary"></summary>
+          <div class="tablewrap">
+            <table class="grid">
+              <thead><tr><th scope="col">File</th><th scope="col" class="money">Row</th><th scope="col">Order</th><th scope="col">Why it was skipped</th></tr></thead>
               <tbody id="invalidRows"></tbody>
             </table>
-          </details>
-          <div class="chips" id="chips" role="group" aria-label="Filter by verdict"></div>
-          <div class="findbar">
-            <label class="sr-only" for="q">Search orders</label>
-            <input type="search" id="q" placeholder="Search by order id or reason" autocomplete="off" />
-            <label class="sortpick" for="sortSel">Sort by
-              <select id="sortSel">
-                <option value="verdict:1">Needs attention first</option>
-                <option value="order_id:1">Order id</option>
-                <option value="amount:-1">Amount, high to low</option>
-                <option value="amount:1">Amount, low to high</option>
-                <option value="gateway_status:1">Gateway status</option>
-                <option value="merchant_status:1">Merchant status</option>
-              </select>
-            </label>
-            <span class="count" id="count" aria-live="polite"></span>
           </div>
-          <div class="tablewrap">
-            <table class="results" role="table" aria-label="Reconciliation results">
-              <thead>
-                <tr role="row">
-                  <th role="columnheader" scope="col" data-sort="order_id" aria-sort="none"><button type="button">Order</button></th>
-                  <th role="columnheader" scope="col" data-sort="verdict" aria-sort="none"><button type="button">Verdict</button></th>
-                  <th role="columnheader" scope="col" class="money" data-sort="amount" aria-sort="none"><button type="button">Amount</button></th>
-                  <th role="columnheader" scope="col" data-sort="gateway_status" aria-sort="none"><button type="button">Gateway</button></th>
-                  <th role="columnheader" scope="col" data-sort="merchant_status" aria-sort="none"><button type="button">Merchant</button></th>
-                  <th role="columnheader" scope="col">Why</th>
-                </tr>
-              </thead>
-              <tbody id="rows"></tbody>
-            </table>
-          </div>
+        </details>
+        <div class="filters" id="chips" role="group" aria-label="Filter by verdict"></div>
+        <div class="findbar">
+          <label class="sr-only" for="q">Search orders</label>
+          <input type="search" id="q" placeholder="Search by order id or reason" autocomplete="off" />
+          <label class="sortpick" for="sortSel">Sort by
+            <select id="sortSel">
+              <option value="verdict:1">Needs attention first</option>
+              <option value="order_id:1">Order id</option>
+              <option value="amount:-1">Amount, high to low</option>
+              <option value="amount:1">Amount, low to high</option>
+              <option value="gateway_status:1">Gateway status</option>
+              <option value="merchant_status:1">Merchant status</option>
+            </select>
+          </label>
+          <span class="count" id="count" aria-live="polite"></span>
         </div>
-      </section>
-
-      <section class="step" aria-labelledby="s3">
-        <header>
-          <span class="stepno" aria-hidden="true">3</span>
-          <h2 id="s3">Take the recommended actions</h2>
-        </header>
-        <div class="actions">
-          <button type="button" class="btn" id="dlCorrections" disabled>Download corrections CSV</button>
-          <button type="button" class="btn" id="dlReview" disabled>Download review CSV</button>
-          <p class="why" id="actionsWhy">Run a reconciliation first. The corrections file lists orders where the merchant should be marked paid. The review file lists everything that needs a person. Files are made in your browser; nothing is sent anywhere.</p>
+        <div class="tablewrap">
+          <table class="grid results" role="table" aria-label="Reconciliation results">
+            <thead>
+              <tr role="row">
+                <th role="columnheader" scope="col" data-sort="order_id" aria-sort="none"><button type="button">Order</button></th>
+                <th role="columnheader" scope="col" data-sort="verdict" aria-sort="none"><button type="button">Verdict</button></th>
+                <th role="columnheader" scope="col" class="money" data-sort="amount" aria-sort="none"><button type="button">Amount</button></th>
+                <th role="columnheader" scope="col" data-sort="gateway_status" aria-sort="none"><button type="button">Gateway</button></th>
+                <th role="columnheader" scope="col" data-sort="merchant_status" aria-sort="none"><button type="button">Merchant</button></th>
+                <th role="columnheader" scope="col">Reason</th>
+              </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
         </div>
-      </section>
+      </div>
     </section>
 
-    <!--LIVE_PANEL-->
-
-    <!-- ======================= System activity ======================= -->
-    <section class="tabpanel" role="tabpanel" id="panel-activity" aria-labelledby="tab-activity" hidden>
-      <div class="activity-head">
-        <h2 style="font-size:21px">System activity</h2>
-        <span class="livestate"><span class="dot" id="dot"></span><span id="livetext">connecting&hellip;</span></span>
-        <span class="grow"></span>
-        <label class="techtoggle"><input type="checkbox" id="techToggle" /> Show technical details</label>
-      </div>
-      <p class="sub" style="margin-top:-6px">What the always-on pipeline has seen and decided. This is separate from the reconcile tool above and needs a connected database.</p>
-
-      <div id="actError" class="errorbox" role="alert" hidden></div>
-      <div class="warnbar" id="orphanWarn" hidden></div>
-      <div class="cards" id="actCards"></div>
-
-      <div class="panels">
-        <div class="panel attention">
-          <h3>Needs a person</h3>
-          <div class="hint">Genuine anomalies the system would not settle by itself.</div>
-          <div class="bignum" id="rqOpen">&mdash;</div>
-          <div id="rqChips" style="margin-top:8px"></div>
-          <ul class="rqlist" id="rqList"></ul>
-        </div>
-        <div class="panel">
-          <h3>Not about an order</h3>
-          <div class="hint">Payment notifications that carry no order id (payment links, legacy flows). Routine, nothing to do.</div>
-          <div class="bignum" id="oos">&mdash;</div>
-        </div>
-      </div>
-
-      <h3 style="font-size:19px;margin-bottom:8px">Recent decisions</h3>
-      <div class="feedwrap">
-        <table>
-          <caption class="sr-only">Most recent decisions made by the pipeline</caption>
-          <thead><tr><th scope="col">When</th><th scope="col">Order</th><th scope="col">Reported by</th><th scope="col">What happened</th><th scope="col">Change</th></tr></thead>
-          <tbody id="feed"></tbody>
-        </table>
+    <section class="actions-block" aria-labelledby="hActions">
+      <h2 class="label" id="hActions">Recommended actions</h2>
+      <div class="actions">
+        <button type="button" class="btn" id="dlCorrections" disabled>Download corrections CSV</button>
+        <button type="button" class="btn" id="dlReview" disabled>Download review CSV</button>
+        <p class="why" id="actionsWhy">Run a check first. The corrections file lists orders where the merchant should be marked paid. The review file lists everything that needs a person. Files are made in your browser; nothing is sent anywhere.</p>
       </div>
     </section>
-  </main>
-</div>
+  </section>
+
+  <!--LIVE_PANEL-->
+
+  <!-- ======================= System activity ======================= -->
+  <section class="tabpanel" role="tabpanel" id="panel-activity" aria-labelledby="tab-activity" hidden>
+    <div class="activity-head">
+      <h2 class="page-title">System activity</h2>
+      <span class="livestate"><span class="dot" id="dot"></span><span id="livetext">connecting&hellip;</span></span>
+      <span class="grow"></span>
+      <label class="techtoggle"><input type="checkbox" id="techToggle" /> Show technical details</label>
+    </div>
+    <p class="description" style="margin-bottom:24px">What the always-on pipeline has seen and decided. This is separate from the reconcile tool and needs a connected database.</p>
+
+    <div id="actError" class="alert" role="alert" hidden></div>
+    <div class="alert warnbar" id="orphanWarn" hidden></div>
+    <dl class="summary" id="actCards"></dl>
+
+    <div class="split">
+      <div>
+        <h3>Needs a person</h3>
+        <p class="hint">Genuine anomalies the system would not settle by itself.</p>
+        <div class="bignum" id="rqOpen">&mdash;</div>
+        <div class="reason-pills" id="rqChips"></div>
+        <ul class="rqlist" id="rqList"></ul>
+      </div>
+      <div>
+        <h3>Not about an order</h3>
+        <p class="hint">Payment notifications that carry no order id (payment links, legacy flows). Routine, nothing to do.</p>
+        <div class="bignum" id="oos">&mdash;</div>
+      </div>
+    </div>
+
+    <h3 style="margin-bottom:8px">Recent decisions</h3>
+    <div class="tablewrap feedwrap">
+      <table class="grid">
+        <caption class="sr-only">Most recent decisions made by the pipeline</caption>
+        <thead><tr><th scope="col">When</th><th scope="col">Order</th><th scope="col">Reported by</th><th scope="col">What happened</th><th scope="col">Change</th></tr></thead>
+        <tbody id="feed"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
 <script src="/assets/shell.js" defer></script>
 <script src="/assets/tool.js" defer></script>
 <script src="/assets/activity.js" defer></script>

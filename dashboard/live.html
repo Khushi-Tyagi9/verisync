@@ -1,7 +1,7 @@
 <section class="tabpanel" role="tabpanel" id="panel-live" aria-labelledby="tab-live" hidden>
-  <div class="livebox" id="livebox" data-needs-token="__LIVE_NEEDS_TOKEN__">
-    <h2>Live scenarios</h2>
-    <p class="sub" style="margin:0 0 12px">Submit a synthetic order and watch it move through the same decision engine. Each scenario shows where it should end and why. Synthetic data only; nothing real is touched.</p>
+  <div id="livebox" data-needs-token="__LIVE_NEEDS_TOKEN__">
+    <h2 class="page-title">Live scenarios</h2>
+    <p class="description">Submit a synthetic order and watch it move through the same decision engine. Each scenario shows where it should end and why. Synthetic data only; nothing real is touched.</p>
     <form class="liveform" id="liveForm">
       <label>Amount (INR)
         <input type="number" id="liveAmount" min="10" max="100000" step="1" value="500" required />
@@ -15,12 +15,12 @@
       <label id="liveTokenWrap" hidden>Write token
         <input type="password" id="liveToken" autocomplete="off" />
       </label>
-      <button type="submit" id="liveGo">Submit</button>
+      <button type="submit" class="btn primary" id="liveGo">Submit</button>
     </form>
-    <div class="scenario-why" id="liveWhy"></div>
+    <p class="scenario-why" id="liveWhy"></p>
     <div class="livemsg" id="liveMsg" role="status" aria-live="polite"></div>
-    <div class="livetable">
-      <table>
+    <div class="tablewrap" style="margin-top:16px">
+      <table class="grid">
         <caption class="sr-only">Recent live orders and where they ended</caption>
         <thead><tr><th scope="col">Order</th><th scope="col">Scenario</th><th scope="col">Outcome</th><th scope="col">Why it ended there</th></tr></thead>
         <tbody id="liveRows"></tbody>

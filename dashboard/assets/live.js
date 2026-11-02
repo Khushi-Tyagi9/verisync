@@ -8,6 +8,18 @@
   let busy = false;
   let catalog = {};
   const $ = (id) => document.getElementById(id);
+  // Live outcomes use the same pills as the reconcile verdicts they map to.
+  const PILL_FOR_TAG = {
+    RESOLVED_NATURALLY: "v-CONSISTENT",
+    RESOLVED_AUTOCORRECTED: "v-AUTO_CORRECT",
+    DISPUTED: "v-DISPUTED",
+    FLAGGED_UNSAFE_DRIFT: "v-FLAGGED_RISKY",
+    FLAGGED_AMOUNT_MISMATCH: "v-CORRELATION_FAILED",
+    FLAGGED_CURRENCY_MISMATCH: "v-CORRELATION_FAILED",
+    DEAD_LETTER: "v-UNRESOLVED",
+    PENDING_RECHECK: "t-info",
+    PROCESSING: "t-info",
+  };
 
   function cell(tag, cls, text) {
     const e = document.createElement(tag);
@@ -56,11 +68,11 @@
       return;
     }
     for (const o of orders) {
-      const tr = cell("tr");
-      tr.appendChild(cell("td", "oid mono", o.order_id.replace("order_LIVE_", "")));
+      const tr = cell("tr", "hoverable");
+      tr.appendChild(cell("td", "oid", o.order_id.replace("order_LIVE_", "")));
       tr.appendChild(cell("td", "", o.scenario_label || "?"));
       const oc = cell("td");
-      oc.appendChild(cell("span", "otag " + o.outcome.tone, o.outcome.label));
+      oc.appendChild(cell("span", "pill " + (PILL_FOR_TAG[o.outcome.tag] || "t-quiet"), o.outcome.label));
       if (o.recheck_in_seconds != null) oc.appendChild(cell("span", "match", "recheck in " + o.recheck_in_seconds + "s"));
       if (o.outcome.terminal && o.expected_tag) {
         const ok = o.outcome.tag === o.expected_tag;
@@ -69,7 +81,7 @@
       tr.appendChild(oc);
       let why = o.why || "";
       if (!o.outcome.terminal) why = "Still in progress. " + why;
-      tr.appendChild(cell("td", "why", why));
+      tr.appendChild(cell("td", "muted", why));
       body.appendChild(tr);
     }
   }

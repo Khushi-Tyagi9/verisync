@@ -51,22 +51,26 @@
   }
 
   function renderCards(o) {
+    // Same single row of numbers as the reconcile summary.
     const defs = [
-      ["AUTO_CORRECT", o.auto_corrected, "Corrections recommended"],
-      ["CONSISTENT", o.resolved_naturally, "Merchant caught up on its own"],
-      ["DISPUTED", o.disputed, "Refunds or disputes"],
-      ["FLAGGED_RISKY", o.dead_letter, "Gave up, need a person"],
-      ["UNRESOLVED", o.in_progress, "Waiting to recheck"],
       [null, o.tracked, "Orders seen"],
+      ["AUTO_CORRECT", o.auto_corrected, "Corrections recommended"],
+      ["CONSISTENT", o.resolved_naturally, "Merchant caught up"],
+      ["DISPUTED", o.disputed, "Refunds or disputes"],
+      ["FLAGGED_RISKY", o.dead_letter, "Need a person"],
+      ["UNRESOLVED", o.in_progress, "Waiting to recheck"],
     ];
-    const box = $("actCards");
-    box.replaceChildren();
+    const row = $("actCards");
+    row.replaceChildren();
     for (const [v, n, label] of defs) {
-      const c = el("div", "vcard" + (v ? "" : " total"));
-      if (v) c.dataset.v = v;
-      c.appendChild(el("div", "n", String(n ?? 0)));
-      c.appendChild(el("div", "amt", label));
-      box.appendChild(c);
+      const item = el("div", "item");
+      if (v) item.dataset.v = v;
+      const dt = el("dt");
+      if (v) { const d = el("span", "dot"); d.setAttribute("aria-hidden", "true"); dt.appendChild(d); }
+      dt.appendChild(document.createTextNode(label));
+      item.appendChild(dt);
+      item.appendChild(el("dd", null, String(n ?? 0)));
+      row.appendChild(item);
     }
   }
 
@@ -75,7 +79,7 @@
     const chips = $("rqChips");
     chips.replaceChildren();
     for (const [reason, n] of Object.entries(rq.by_reason || {})) {
-      chips.appendChild(el("span", "chip-static", plain(REASONS, reason) + " · " + n));
+      chips.appendChild(el("span", "pill t-quiet", plain(REASONS, reason) + " · " + n));
     }
     const list = $("rqList");
     list.replaceChildren();
@@ -128,13 +132,15 @@
   }
 
   function setLive(ok, detail) {
-    $("dot").className = "dot" + (ok ? "" : " stale");
+    $("dot").className = "dot " + (ok ? "live" : "stale");
     $("livetext").textContent = ok ? "live · updated " + new Date().toLocaleTimeString() : "not connected";
     const box = $("actError");
     box.hidden = ok;
     if (!ok) {
-      box.replaceChildren(el("span", null, "System activity is unavailable."));
-      box.appendChild(el("small", null, detail || "The server could not read the database. The reconcile tool still works without it."));
+      const body = el("div");
+      body.appendChild(el("span", "msg", "System activity is unavailable."));
+      body.appendChild(el("small", null, detail || "The server could not read the database. The reconcile tool still works without it."));
+      box.replaceChildren(body);
     }
   }
 

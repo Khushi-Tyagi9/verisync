@@ -6,13 +6,15 @@
 
   const MAX_BODY_BYTES = 2 * 1024 * 1024;
 
+  // Plain labels on screen; the engine codes stay in "How it works", the
+  // decision trail and the CSV files.
   const VERDICTS = [
-    { key: "FLAGGED_RISKY", label: "Flagged risky", glyph: "⚠" },
-    { key: "DISPUTED", label: "Disputed", glyph: "⚖" },
-    { key: "CORRELATION_FAILED", label: "Correlation failed", glyph: "≠" },
-    { key: "UNRESOLVED", label: "Unresolved", glyph: "?" },
-    { key: "AUTO_CORRECT", label: "Auto-correct", glyph: "⇄" },
-    { key: "CONSISTENT", label: "Consistent", glyph: "✓" },
+    { key: "FLAGGED_RISKY", label: "Risky" },
+    { key: "DISPUTED", label: "Refund or dispute" },
+    { key: "CORRELATION_FAILED", label: "Data conflict" },
+    { key: "UNRESOLVED", label: "Incomplete" },
+    { key: "AUTO_CORRECT", label: "Safe to correct" },
+    { key: "CONSISTENT", label: "Matches" },
   ];
   const VERDICT_ORDER = Object.fromEntries(VERDICTS.map((v, i) => [v.key, i]));
   const VERDICT_BY_KEY = Object.fromEntries(VERDICTS.map((v) => [v.key, v]));
@@ -74,9 +76,22 @@
   function prettyBytes(n) { return n < 1024 ? n + " B" : (n / 1024).toFixed(n < 10240 ? 1 : 0) + " KB"; }
   function currentUnit() { return document.querySelector('input[name="unit"]:checked').value; }
 
-  function stamp(key) {
-    const v = VERDICT_BY_KEY[key] || { label: key, glyph: "" };
-    return h("span", { class: "stamp v-" + key }, h("i", { "aria-hidden": "true", text: v.glyph }), v.label);
+  function pill(key) {
+    const v = VERDICT_BY_KEY[key] || { label: key };
+    return h("span", { class: "pill v-" + key, text: v.label });
+  }
+
+  // The main screen stays in plain words. A data conflict's server reason
+  // quotes raw paise values, so it is summarised here and shown in full in the
+  // expandable trail.
+  function plainReason(o) {
+    if (o.verdict !== "CORRELATION_FAILED") return o.reason;
+    const what = { amount_mismatch: "the amount", currency_mismatch: "the currency" }[o.correlation_check];
+    let text = what
+      ? "Two records for this order disagree on " + what + ", so neither is trusted until the data is fixed."
+      : "Two records for this order conflict, so neither is trusted until the data is fixed.";
+    if (/invalid row/.test(o.reason)) text += " Some rows for this order were skipped; see the skipped rows.";
+    return text;
   }
 
   function setView(which) {
@@ -171,7 +186,7 @@
       updateUnitHelp();
       updateMeta("Gateway");
       updateMeta("Merchant");
-      $("runStatus").textContent = "Sample loaded. Press Run to reconcile it.";
+      $("runStatus").textContent = "Sample loaded. Press Run to check it.";
       $("run").focus();
     } catch (e) {
       showError("Could not load the sample data.", "Check your connection and try again.");
@@ -184,7 +199,8 @@
   function showError(message, detail, field) {
     const box = $("resError");
     // replaceChildren() would render a null argument as the text "null".
-    box.replaceChildren(...[h("span", { text: message }), detail ? h("small", { text: detail }) : null].filter(Boolean));
+    const lines = [h("span", { class: "msg", text: message }), detail ? h("small", { text: detail }) : null].filter(Boolean);
+    box.replaceChildren(h("div", null, ...lines));
     setView("error");
     $("runStatus").textContent = "Something needs attention.";
     if (field === "gateway" || field === "merchant") {
@@ -205,7 +221,7 @@
       return;
     }
     $("run").disabled = true;
-    $("runStatus").textContent = "Reconciling…";
+    $("runStatus").textContent = "Checking…";
     setView("loading");
     let res, payload = {};
     try {
@@ -239,7 +255,7 @@
     const n = payload.summary.orders;
     const skipped = payload.input.invalid_rows;
     $("runStatus").textContent =
-      "Done: " + n + " order" + (n === 1 ? "" : "s") + " reconciled" +
+      "Done: " + n + " order" + (n === 1 ? "" : "s") + " checked" +
       (skipped ? ", " + skipped + " row" + (skipped === 1 ? "" : "s") + " skipped." : ".");
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     $("results").scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
@@ -258,22 +274,21 @@
   }
 
   function renderCards(r) {
-    const cards = $("cards");
-    cards.replaceChildren();
+    const row = $("cards");
+    row.replaceChildren();
     const multiCurrency = r.orders.some((o) => o.currency && o.currency !== "INR");
+    row.appendChild(
+      h("div", { class: "item" },
+        h("dt", { text: "Orders" }),
+        h("dd", null, String(r.summary.orders),
+          h("span", { class: "amt", text: money(r.summary.amount_paise) + (multiCurrency ? " (mixed currencies)" : "") }))));
     for (const v of VERDICTS) {
       const s = r.summary.by_verdict[v.key];
-      cards.appendChild(
-        h("div", { class: "vcard", "data-v": v.key },
-          stamp(v.key),
-          h("div", { class: "n", text: String(s.count) }),
-          h("div", { class: "amt num", text: money(s.amount_paise) })));
+      row.appendChild(
+        h("div", { class: "item", "data-v": v.key },
+          h("dt", null, h("span", { class: "dot", "aria-hidden": "true" }), v.label),
+          h("dd", null, String(s.count), h("span", { class: "amt", text: money(s.amount_paise) }))));
     }
-    cards.appendChild(
-      h("div", { class: "vcard total" },
-        h("span", { class: "stamp" }, "All orders"),
-        h("div", { class: "n", text: String(r.summary.orders) }),
-        h("div", { class: "amt num", text: money(r.summary.amount_paise) + (multiCurrency ? " (mixed currencies summed as given)" : "") })));
   }
 
   function renderInvalid(r) {
@@ -282,11 +297,11 @@
     box.hidden = bad.length === 0;
     if (!bad.length) return;
     $("invalidSummary").textContent =
-      bad.length + " row" + (bad.length === 1 ? "" : "s") + " could not be read and " + (bad.length === 1 ? "was" : "were") + " skipped";
+      bad.length + " row" + (bad.length === 1 ? "" : "s") + " could not be read and " + (bad.length === 1 ? "was" : "were") + " skipped. Show which";
     $("invalidRows").replaceChildren(...bad.map((b) =>
       h("tr", null,
         h("td", { text: b.source === "gateway" ? "Gateway" : "Merchant" }),
-        h("td", { class: "num", text: String(b.row) }),
+        h("td", { class: "money", text: String(b.row) }),
         h("td", { class: "mono", text: b.order_id || "—" }),
         h("td", { text: b.reasons.join("; ") }))));
   }
@@ -359,11 +374,11 @@
       frag.appendChild(
         h("tr", { class: "datarow", role: "row" },
           h("td", { class: "order", role: "cell" }, btn),
-          h("td", { role: "cell", "data-label": "Verdict" }, stamp(o.verdict)),
+          h("td", { role: "cell", "data-label": "Verdict" }, pill(o.verdict)),
           h("td", { class: "money num", role: "cell", "data-label": "Amount", text: money(o.amount, o.currency) }),
           h("td", { role: "cell", "data-label": "Gateway", text: o.gateway_status || "—" }),
           h("td", { role: "cell", "data-label": "Merchant", text: o.merchant_status || "—" }),
-          h("td", { class: "reason", role: "cell", "data-label": "Why", text: o.reason })));
+          h("td", { class: "reason", role: "cell", "data-label": "Reason", text: plainReason(o) })));
       frag.appendChild(trailRow);
     });
     body.replaceChildren(frag);
@@ -371,11 +386,14 @@
 
   function trailContent(o) {
     return h("div", null,
-      h("p", { class: "action-line", text: o.recommended_action }),
+      h("p", { class: "trail-action", text: o.recommended_action }),
+      h("p", { class: "trail-detail", text: "Details: " + o.reason }),
+      h("p", { class: "trail-title", text: "Decision trail" }),
       h("ol", { class: "trail", "aria-label": "Decision trail for " + o.order_id },
         o.decision_trail.map((t) =>
-          h("li", null, h("strong", { text: t.step }), h("span", { class: "act", text: t.action }), h("span", { class: "why", text: t.reason })))));
+          h("li", null, t.step, h("span", { class: "code", text: t.action }), h("span", { class: "why", text: t.reason })))));
   }
+
 
   for (const th of document.querySelectorAll("th[data-sort]")) {
     th.querySelector("button").addEventListener("click", () => {

@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import hmac
 import logging
+import mimetypes
 import html
 import time
 from pathlib import Path
@@ -32,6 +33,9 @@ except ImportError:
     from queries import build_summary
 
 _log = logging.getLogger("verisync.dashboard")
+
+# Some platforms (Windows, slim images) do not map .woff2; the font is served from /assets.
+mimetypes.add_type("font/woff2", ".woff2")
 
 _INDEX_HTML = (Path(__file__).parent / "index.html").read_text(encoding="utf-8")
 _LIVE_HTML = (Path(__file__).parent / "live.html").read_text(encoding="utf-8")

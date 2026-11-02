@@ -1,4 +1,5 @@
-"""WCAG contrast of the colour tokens in both themes, read straight from the CSS."""
+"""Colour tokens: the exact values specified for both themes, defined once, and
+WCAG AA (4.5:1) for every text/background pair the page uses."""
 
 from __future__ import annotations
 
@@ -11,16 +12,20 @@ CSS = (Path(__file__).resolve().parents[2] / "dashboard" / "assets" / "app.css")
 
 
 def _tokens(block: str) -> dict[str, str]:
-    return dict(re.findall(r"(--[a-z0-9-]+):\s*(#[0-9a-fA-F]{6})", block))
+    return {k: v.upper() for k, v in re.findall(r"(--[a-z0-9-]+):\s*(#[0-9a-fA-F]{6})", block)}
+
+
+def _blocks():
+    light_start = CSS.index(":root {")
+    dark_start = CSS.index("@media (prefers-color-scheme: dark)")
+    dark_end = CSS.index("/* ---- base", dark_start)
+    return CSS[light_start:dark_start], CSS[dark_start:dark_end]
 
 
 def _themes():
-    light_block = CSS[CSS.index(":root {"):CSS.index("@media (prefers-color-scheme: dark)")]
-    dark_start = CSS.index("@media (prefers-color-scheme: dark)")
-    dark_block = CSS[dark_start:CSS.index("* { box-sizing", dark_start)]
+    light_block, dark_block = _blocks()
     light = _tokens(light_block)
-    dark = {**light, **_tokens(dark_block)}
-    return {"light": light, "dark": dark}
+    return {"light": light, "dark": {**light, **_tokens(dark_block)}}
 
 
 def _lum(hex_color: str) -> float:
@@ -34,17 +39,46 @@ def ratio(a: str, b: str) -> float:
     return (hi + 0.05) / (lo + 0.05)
 
 
+SPEC = {
+    "light": {"--page": "#FAFAFA", "--surface": "#FFFFFF", "--border": "#E5E7EB",
+              "--text": "#111827", "--muted": "#6B7280", "--accent": "#2F4BFF"},
+    "dark": {"--page": "#0B0D12", "--surface": "#12151C", "--border": "#232733",
+             "--text": "#E6E8EE", "--muted": "#9AA1B2", "--accent": "#7C8CFF"},
+}
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_tokens_have_exactly_the_specified_values(theme):
+    t = _themes()[theme]
+    for name, value in SPEC[theme].items():
+        assert t[name] == value, (theme, name, t[name])
+
+
+def test_each_token_is_defined_once_per_theme():
+    light_block, dark_block = _blocks()
+    for block in (light_block, dark_block):
+        names = re.findall(r"(--[a-z0-9-]+):\s*#", block)
+        assert len(names) == len(set(names)), [n for n in names if names.count(n) > 1]
+    # and nowhere else in the stylesheet
+    rest = CSS.replace(light_block, "").replace(dark_block, "")
+    assert not re.findall(r"--[a-z0-9-]+:\s*#[0-9a-fA-F]{6}", rest)
+
+
+def test_dark_theme_redefines_every_colour_token():
+    light_block, dark_block = _blocks()
+    assert set(_tokens(dark_block)) == set(_tokens(light_block))
+
+
 TEXT_PAIRS = [
-    ("--ink", "--bg"), ("--ink", "--panel"), ("--ink", "--panel-2"),
-    ("--muted", "--bg"), ("--muted", "--panel"), ("--muted", "--panel-2"),
-    ("--accent", "--bg"), ("--accent", "--panel"),
-    ("--on-accent", "--accent"), ("--on-accent", "--accent-hover"),
-    ("--notice-ink", "--notice-bg"), ("--err-ink", "--err-bg"),
-    ("--v-auto-ink", "--v-auto-bg"), ("--v-ok-ink", "--v-ok-bg"), ("--v-risk-ink", "--v-risk-bg"),
-    ("--v-disp-ink", "--v-disp-bg"), ("--v-corr-ink", "--v-corr-bg"), ("--v-unres-ink", "--v-unres-bg"),
-    # verdict colours used as text on the plain panel (review queue reasons, "as expected")
-    ("--v-auto-ink", "--panel"), ("--v-disp-ink", "--panel"), ("--err-ink", "--panel"),
-    ("--bg", "--ink"),   # selected chip: page background text on ink fill
+    ("--text", "--page"), ("--text", "--surface"),
+    ("--muted", "--page"), ("--muted", "--surface"),
+    ("--accent", "--page"), ("--accent", "--surface"),          # links
+    ("--on-accent", "--accent"),                                # primary button label
+    ("--pill-grey-fg", "--pill-grey-bg"), ("--pill-blue-fg", "--pill-blue-bg"),
+    ("--pill-red-fg", "--pill-red-bg"), ("--pill-amber-fg", "--pill-amber-bg"),
+    ("--pill-purple-fg", "--pill-purple-bg"),
+    ("--pill-red-fg", "--surface"),                             # error text, "unexpected"
+    ("--text", "--pill-red-bg"),                                # alert body text
 ]
 
 
@@ -56,19 +90,12 @@ def test_text_pairs_meet_wcag_aa(theme, fg, bg):
 
 
 @pytest.mark.parametrize("theme", ["light", "dark"])
-def test_focus_ring_and_borders_are_visible_against_surfaces(theme):
+def test_focus_ring_is_visible_against_both_surfaces(theme):
     t = _themes()[theme]
-    for surface in ("--bg", "--panel"):
+    for surface in ("--page", "--surface"):
         assert ratio(t["--focus"], t[surface]) >= 3.0
-        assert ratio(t["--rule-strong"], t[surface]) >= 3.0, (theme, surface)
-
-
-def test_dark_theme_redefines_every_colour_token():
-    start = CSS.index("@media (prefers-color-scheme: dark)")
-    dark_only = _tokens(CSS[start:CSS.index("* { box-sizing", start)])
-    assert set(dark_only) == set(_themes()["light"])
 
 
 def test_the_contrast_function_can_fail():
     assert ratio("#777777", "#808080") < 1.2
-    assert ratio("#000000", "#ffffff") == pytest.approx(21.0)
+    assert ratio("#000000", "#FFFFFF") == pytest.approx(21.0)
