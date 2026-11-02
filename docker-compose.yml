@@ -25,6 +25,12 @@ x-app-env: &app-env
   LIFECYCLE_TOPIC: order-lifecycle-events
   POSTGRES_DSN: postgresql://verisync:verisync@postgres:5432/verisync
   REDIS_URL: redis://redis:6379/0
+  # Timing knobs, overridable from the shell so scripts/run_batch.py can finish
+  # in minutes instead of ~30. Defaults match worker/config.py and
+  # merchant_sim/config.py.
+  WORKER_RECHECK_DELAY_SECONDS: ${WORKER_RECHECK_DELAY_SECONDS:-600}
+  WORKER_SWEEP_INTERVAL_SECONDS: ${WORKER_SWEEP_INTERVAL_SECONDS:-180}
+  MERCHANT_SIM_LAG_SECONDS: ${MERCHANT_SIM_LAG_SECONDS:-900}
 
 x-app: &app
   build: .
