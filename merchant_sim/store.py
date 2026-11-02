@@ -15,7 +15,7 @@ _INSERT_IF_ABSENT = """
 """
 
 _DUE = """
-    SELECT order_id, amount, currency
+    SELECT order_id, amount, currency, next_action_at
     FROM merchant_orders
     WHERE status = 'pending'
       AND next_action_at IS NOT NULL
@@ -38,6 +38,7 @@ class DueOrder:
     order_id: str
     amount: Optional[int]
     currency: Optional[str]
+    next_action_at: Optional[datetime] = None
 
 
 class MerchantOrderStore:
@@ -80,7 +81,7 @@ class MerchantOrderStore:
 
     def due_transitions(self, conn, *, now: datetime, limit: int = 200) -> list[DueOrder]:
         rows = conn.execute(_DUE, {"now": now, "limit": limit}).fetchall()
-        return [DueOrder(order_id=r[0], amount=r[1], currency=r[2]) for r in rows]
+        return [DueOrder(order_id=r[0], amount=r[1], currency=r[2], next_action_at=r[3]) for r in rows]
 
     def mark_paid(self, conn, order_id: str) -> bool:
         return conn.execute(_MARK_PAID, {"order_id": order_id}).fetchone() is not None

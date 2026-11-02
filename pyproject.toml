@@ -17,3 +17,4 @@ dependencies = [
 pythonpath = ["."]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = ["integration: needs the compose Postgres (skipped when unreachable)"]

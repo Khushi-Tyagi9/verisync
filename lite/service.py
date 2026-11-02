@@ -153,10 +153,17 @@ class LiteService:
             ).fetchone()[0]
             if not got:
                 return TickResult(ran=False)
+            # Chronological per order: a paid transition due before the order's
+            # recheck goes first, one due after it goes last (and finds the
+            # order already resolved).
+            paid = self._processor.process_due_merchant_transitions(
+                now, limit, before_rechecks=True
+            )
             rechecks = self._processor.process_due_rechecks(now, limit)
-            paid = 0
             if time.monotonic() < deadline:
-                paid = self._processor.process_due_merchant_transitions(now, limit)
+                paid += self._processor.process_due_merchant_transitions(
+                    now, limit, before_rechecks=False
+                )
         return TickResult(
             ran=True,
             reclaimed=rechecks.reclaimed,

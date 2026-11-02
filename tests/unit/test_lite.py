@@ -189,9 +189,9 @@ class RecordingProcessor:
         self.rechecks.append(limit)
         return RecheckCounts(reclaimed=1, resolved=2)
 
-    def process_due_merchant_transitions(self, now, limit):
-        self.merchant.append(limit)
-        return 3
+    def process_due_merchant_transitions(self, now, limit, *, before_rechecks=None):
+        self.merchant.append((limit, before_rechecks))
+        return 1
 
 
 def _settings(**over):
@@ -222,8 +222,10 @@ def test_tick_skips_work_when_lock_is_held_elsewhere():
 def test_tick_runs_bounded_work_under_a_transaction_level_lock():
     svc, pool, proc, _ = _service(script={"pg_try_advisory_xact_lock": [(True,)]}, tick_limit=7)
     result = svc.tick()
-    assert (result.ran, result.reclaimed, result.rechecks_resolved, result.merchant_paid) == (True, 1, 2, 3)
-    assert proc.rechecks == [7] and proc.merchant == [7]
+    assert (result.ran, result.reclaimed, result.rechecks_resolved, result.merchant_paid) == (True, 1, 2, 2)
+    assert proc.rechecks == [7]
+    # paid transitions due before the recheck, the recheck pass, then those due after
+    assert proc.merchant == [(7, True), (7, False)]
     sql, params = pool.conns[0].executed[0]
     assert "pg_try_advisory_xact_lock" in sql and params == (TICK_LOCK_KEY,)
     # Never a session-level lock: those leak through a transaction-mode pooler.
@@ -231,10 +233,10 @@ def test_tick_runs_bounded_work_under_a_transaction_level_lock():
     assert "pg_advisory_lock" not in all_sql and "pg_try_advisory_lock" not in all_sql
 
 
-def test_tick_skips_merchant_stage_once_the_budget_is_spent():
+def test_tick_skips_the_late_merchant_pass_once_the_budget_is_spent():
     svc, _, proc, _ = _service(script={"pg_try_advisory_xact_lock": [(True,)]})
     svc.tick(budget_seconds=-1)
-    assert proc.rechecks and proc.merchant == []
+    assert proc.rechecks and proc.merchant == [(20, True)]
 
 
 # --------------------------------------------------------------------------- #
@@ -354,3 +356,34 @@ def test_noop_delay_queue_holds_nothing():
     assert q.due(NOW) == []
     q.remove("o")
     q.close()
+
+
+def test_merchant_transitions_split_around_the_armed_recheck():
+    from merchant_sim.store import DueOrder
+
+    t0 = NOW
+    due = [
+        DueOrder("early", 1, "INR", t0 + timedelta(seconds=2)),    # paid before recheck
+        DueOrder("late", 1, "INR", t0 + timedelta(seconds=60)),    # paid after recheck
+        DueOrder("unarmed", 1, "INR", t0 + timedelta(seconds=90)),  # no recheck armed
+    ]
+    armed = {"early": t0 + timedelta(seconds=20), "late": t0 + timedelta(seconds=20)}
+
+    class ArmedStore(FakeStore):
+        @contextmanager
+        def connection(self):
+            class C:
+                def execute(self_, sql, params):
+                    return _Result(list(armed.items()))
+
+            yield C()
+
+    def run(flag):
+        merchant = FakeMerchantStore(due=due)
+        proc = _processor(merchant=merchant, store=ArmedStore())
+        proc.process_due_merchant_transitions(NOW, 20, before_rechecks=flag)
+        return merchant.paid
+
+    assert run(True) == ["early", "unarmed"]
+    assert run(False) == ["late"]
+    assert run(None) == ["early", "late", "unarmed"]
