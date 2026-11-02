@@ -1,0 +1,9 @@
+# Extra dependencies for the full Redpanda + Redis pipeline (ingestion
+# publisher, worker, recheck, sweep, merchant simulator). Installed by the
+# Dockerfile on top of requirements.txt; deliberately NOT installed on Vercel.
+
+# Kafka / Redpanda client
+confluent-kafka>=2.5
+
+# Redis (worker idempotency pre-filter + recheck delay queue)
+redis>=5.0

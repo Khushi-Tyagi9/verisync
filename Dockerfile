@@ -8,14 +8,15 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+COPY requirements.txt requirements-pipeline.txt ./
+RUN pip install -r requirements.txt -r requirements-pipeline.txt
 
 COPY decision ./decision
 COPY ingestion ./ingestion
 COPY worker ./worker
 COPY merchant_sim ./merchant_sim
 COPY dashboard ./dashboard
+COPY lite ./lite
 COPY scripts ./scripts
 COPY db ./db
 

@@ -1,18 +1,15 @@
-# Runtime dependencies.
+# Web runtime dependencies: what the dashboard and the serverless "lite" mode
+# need. Vercel deploys from the repo root and installs from this file (and the
+# identical list in pyproject.toml), so confluent-kafka and redis must NOT be
+# listed here; they live in requirements-pipeline.txt. The Docker image
+# installs both files.
 #
-# decision/ (Phase 2) is pure stdlib and needs nothing here. Everything below
-# is for the ingestion service (Phase 3) and the worker (Phase 4+).
+# decision/ is pure stdlib and needs nothing here.
 
 fastapi>=0.115
 uvicorn[standard]>=0.30
 python-dotenv>=1.0
 
-# Kafka / Redpanda client
-confluent-kafka>=2.5
-
 # Postgres
 psycopg[binary]>=3.2
 psycopg-pool>=3.2
-
-# Redis (worker idempotency pre-filter + recheck delay queue)
-redis>=5.0

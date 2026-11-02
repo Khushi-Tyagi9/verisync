@@ -1,7 +1,8 @@
 # Runtime dependencies for the dashboard app.
 #
-# Vercel's Root Directory for this project is "dashboard", so this is the
-# requirements.txt Vercel's Python build actually installs from. Version
+# Only used if Vercel's Root Directory is still "dashboard" (read-only mode).
+# Live mode needs the repo root as Root Directory, which installs the root
+# requirements.txt instead. Version
 # pins match requirements.txt at the repo root.
 
 fastapi>=0.115
