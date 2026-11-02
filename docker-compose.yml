@@ -1,9 +1,12 @@
 name: verisync
 
-# Phase 1 infra only: Redpanda (Kafka API), Redis, Postgres, plus Redpanda
-# Console for eyeballing topics. No application services yet.
+# Infra (Redpanda, Redis, Postgres, Redpanda Console) plus the application
+# services (ingestion, worker, recheck, sweep, merchant-sim, dashboard), all
+# built from the one Dockerfile at the repo root.
 #
 # Host-facing endpoints once this is up:
+#   Ingestion webhook      http://localhost:8000/webhooks/razorpay
+#   Dashboard              http://localhost:8050
 #   Kafka (host apps)      localhost:19092        <- note: 19092, not 9092
 #   Kafka (in-network)     redpanda:9092
 #   Redpanda Admin API     localhost:9644
@@ -12,8 +15,31 @@ name: verisync
 #   Postgres              localhost:15432  (verisync / verisync / verisync)
 #   Redis                 localhost:16379  (host 16379 -> container 6379)
 #
-# Dev credentials are inlined on purpose so `docker compose up` just works for
-# the Phase 1 checkpoint. Real secrets arrive with .env in Phase 3.
+# Application containers talk to the infra by in-network hostname and the
+# container ports (redpanda:9092, postgres:5432, redis:6379), never the host
+# ports above. Dev credentials are inlined on purpose so `docker compose up`
+# just works; RAZORPAY_WEBHOOK_SECRET can be overridden from the shell or .env.
+
+x-app-env: &app-env
+  KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+  LIFECYCLE_TOPIC: order-lifecycle-events
+  POSTGRES_DSN: postgresql://verisync:verisync@postgres:5432/verisync
+  REDIS_URL: redis://redis:6379/0
+
+x-app: &app
+  build: .
+  image: verisync-app
+  restart: unless-stopped
+  environment:
+    <<: *app-env
+
+# Worker-style services have no HTTP port, so liveness is "PID 1 is still the
+# python module we started".
+x-worker-health: &worker-health
+  interval: 10s
+  timeout: 3s
+  retries: 5
+  start_period: 10s
 
 services:
   redpanda:
@@ -94,6 +120,100 @@ services:
       interval: 10s
       timeout: 3s
       retries: 12
+
+  ingestion:
+    <<: *app
+    container_name: verisync-ingestion
+    command: ["uvicorn", "--factory", "ingestion.webhook:create_app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      <<: *app-env
+      RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:-local_dev_webhook_secret}
+    ports:
+      - "8000:8000"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  worker:
+    <<: *app
+    container_name: verisync-worker
+    command: ["python", "-m", "worker.consumer"]
+    depends_on:
+      ingestion:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      <<: *worker-health
+      test: ["CMD-SHELL", "grep -q worker.consumer /proc/1/cmdline"]
+
+  recheck:
+    <<: *app
+    container_name: verisync-recheck
+    command: ["python", "-m", "worker.recheck"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      <<: *worker-health
+      test: ["CMD-SHELL", "grep -q worker.recheck /proc/1/cmdline"]
+
+  sweep:
+    <<: *app
+    container_name: verisync-sweep
+    command: ["python", "-m", "worker.sweep"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      <<: *worker-health
+      test: ["CMD-SHELL", "grep -q worker.sweep /proc/1/cmdline"]
+
+  merchant-sim:
+    <<: *app
+    container_name: verisync-merchant-sim
+    command: ["python", "-m", "merchant_sim.simulator"]
+    depends_on:
+      ingestion:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      <<: *worker-health
+      test: ["CMD-SHELL", "grep -q merchant_sim.simulator /proc/1/cmdline"]
+
+  dashboard:
+    <<: *app
+    container_name: verisync-dashboard
+    command: ["python", "-m", "dashboard.app"]
+    environment:
+      <<: *app-env
+      DASHBOARD_HOST: 0.0.0.0
+    ports:
+      - "8050:8050"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8050/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
 volumes:
   redpanda_data:
