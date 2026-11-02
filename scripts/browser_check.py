@@ -32,9 +32,9 @@ ADMIN_DSN = os.environ.get(
 # option label -> outcome label shown in the table
 EXPECT = {
     "Normal (merchant pays at once)": "Resolved naturally",
-    "Lagging merchant": "Auto-corrected",
-    "Stuck merchant (never pays)": "Auto-corrected",
-    "Silent merchant (no record)": "Dead-lettered",
+    "Lagging merchant": "Correction recommended",
+    "Stuck merchant (never pays)": "Correction recommended",
+    "Silent merchant (no record)": "Review recommended",
     "Risky drift (gateway failed, merchant paid)": "Flagged: unsafe drift",
     "Refund on a settled order": "Disputed",
     "Correlation failure (amount mismatch)": "Flagged: amount mismatch",

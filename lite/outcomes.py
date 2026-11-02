@@ -8,9 +8,9 @@ from typing import Iterable, Optional
 # pointer status -> (label, tone, terminal)
 _POINTER_TAGS = {
     "RESOLVED_NATURALLY": ("Resolved naturally", "good", True),
-    "RESOLVED_AUTOCORRECTED": ("Auto-corrected", "good", True),
+    "RESOLVED_AUTOCORRECTED": ("Correction recommended", "good", True),
     "DISPUTED": ("Disputed", "warn", True),
-    "DEAD_LETTER": ("Dead-lettered", "bad", True),
+    "DEAD_LETTER": ("Review recommended", "bad", True),
     "PENDING_RECHECK": ("Waiting for recheck", "info", False),
     "PROCESSING": ("Rechecking", "info", False),
 }

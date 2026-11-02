@@ -103,7 +103,7 @@ def decide(
                 new_status=ReconStatus.RESOLVED_AUTOCORRECTED,
                 clear_recheck_at=True,
                 audit=audit("APPLY_AUTOCORRECT", "SAFE", ReconStatus.RESOLVED_AUTOCORRECTED.value),
-                reason="safe drift still present at recheck; merchant record auto-corrected",
+                reason="safe drift still present at recheck; correction recommended",
             )
         if drift.kind is DriftKind.NONE:
             return Decision(

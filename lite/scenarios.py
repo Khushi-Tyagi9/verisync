@@ -47,25 +47,25 @@ SCENARIOS: dict[str, Scenario] = {
             "lagging", "Lagging merchant", "lagging",
             "RESOLVED_AUTOCORRECTED",
             "The merchant was still pending when the recheck fired, so the safe "
-            "drift was auto-corrected. Its late paid event was then ignored.",
+            "drift got a recommended correction. Its late paid event was then ignored.",
         ),
         Scenario(
             "stuck", "Stuck merchant (never pays)", "stuck",
             "RESOLVED_AUTOCORRECTED",
             "Razorpay captured but the merchant never marked it paid; "
-            "auto-corrected at the recheck.",
+            "a correction was recommended at the recheck.",
         ),
         Scenario(
             "silent", "Silent merchant (no record)", "silent",
             "DEAD_LETTER",
             "The merchant never reported this order. Each recheck found no "
-            "merchant record; after the retry limit it was dead-lettered for review.",
+            "merchant record; after the retry limit it was sent to review.",
         ),
         Scenario(
             "risky_drift", "Risky drift (gateway failed, merchant paid)", "immediate",
             "FLAGGED_UNSAFE_DRIFT",
             "The merchant shows paid for a payment Razorpay says failed. That is "
-            "never auto-corrected; it is flagged for a human.",
+            "never corrected automatically; it is flagged for a human.",
         ),
         Scenario(
             "reversal", "Refund on a settled order", "immediate",
