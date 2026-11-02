@@ -96,6 +96,7 @@ def main() -> int:
             errors: list[str] = []
             page.on("pageerror", lambda e: errors.append(str(e)))
             page.goto(base)
+            page.click("#tab-live")
             page.wait_for_selector("#liveScenario option", state="attached")
 
             check("Live demo: serverless mode. Postgres only." in page.inner_text(".badge-live"),
