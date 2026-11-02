@@ -179,3 +179,40 @@ def test_dashboard_import_does_not_pull_in_kafka():
         "assert 'confluent_kafka' not in sys.modules and 'merchant_sim' not in sys.modules"
     )
     subprocess.run([sys.executable, "-c", code], check=True)
+
+
+# --- snapshot label --------------------------------------------------------
+
+
+def _label_client(label):
+    app = create_app(
+        settings=DashboardSettings(postgres_dsn="unused", snapshot_label=label),
+        pool=object(),
+    )
+    return TestClient(app)
+
+
+def test_snapshot_label_shown_in_header_when_set():
+    page = _label_client("Snapshot of a 150-order batch run, Oct 8").get("/").text
+    assert 'class="snapshot">Snapshot of a 150-order batch run, Oct 8<' in page
+
+
+def test_snapshot_label_absent_when_unset():
+    page = _label_client(None).get("/").text
+    assert 'class="snapshot"' not in page
+    assert "<!--SNAPSHOT_LABEL-->" not in page
+
+
+def test_snapshot_label_is_html_escaped():
+    page = _label_client("<script>alert(1)</script>").get("/").text
+    assert "<script>alert(1)</script>" not in page
+    assert "&lt;script&gt;" in page
+
+
+def test_snapshot_label_env_blank_means_unset(monkeypatch):
+    from dashboard.config import load_settings
+
+    monkeypatch.setenv("DASHBOARD_SNAPSHOT_LABEL", "  ")
+    assert load_settings(env_file=None).snapshot_label is None
+    monkeypatch.setenv("DASHBOARD_SNAPSHOT_LABEL", "Oct 8 run")
+    assert load_settings(env_file=None).snapshot_label == "Oct 8 run"

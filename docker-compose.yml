@@ -211,6 +211,7 @@ services:
       DASHBOARD_HOST: 0.0.0.0
       # Off unless the shell / .env sets it; see POST /api/demo/orders.
       DASHBOARD_DEMO_MODE: ${DASHBOARD_DEMO_MODE:-false}
+      DASHBOARD_SNAPSHOT_LABEL: ${DASHBOARD_SNAPSHOT_LABEL:-}
     ports:
       - "8050:8050"
     depends_on:

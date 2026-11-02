@@ -7,6 +7,7 @@ or:           uvicorn --factory dashboard.app:create_app
 from __future__ import annotations
 
 import contextlib
+import html
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -71,6 +72,12 @@ def create_app(
     settings = settings or load_settings()
     emit_orders = emit_orders or _emit_synthetic_orders
     page = _INDEX_HTML.replace("__POLL_INTERVAL_MS__", str(settings.poll_interval_ms))
+    page = page.replace(
+        "<!--SNAPSHOT_LABEL-->",
+        f'<span class="snapshot">{html.escape(settings.snapshot_label)}</span>'
+        if settings.snapshot_label
+        else "",
+    )
     page = page.replace(
         "<!--DEMO_CONTROL-->", _DEMO_CONTROL_HTML if settings.demo_mode else ""
     )
