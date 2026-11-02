@@ -20,3 +20,6 @@ env/
 
 # Docker volume dumps, local scratch
 *.log
+
+# Local database dump
+verisync_data.sql
