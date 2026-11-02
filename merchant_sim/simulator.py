@@ -29,10 +29,10 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from ingestion.payload import build_envelope
 from ingestion.publisher import KafkaLifecyclePublisher
 
 from .config import MerchantSimSettings, load_settings
+from .envelopes import merchant_envelope, razorpay_envelope
 from .store import MerchantOrderStore
 
 log = logging.getLogger("verisync.merchant_sim")
@@ -226,21 +226,7 @@ class MerchantSimulator:
         return fired
 
     def _emit(self, order_id: str, status: str, amount, currency) -> None:
-        raw = {
-            "order_id": order_id,
-            "status": status,
-            "amount": amount,
-            "currency": currency,
-            "created_at": int(time.time()),
-        }
-        envelope = build_envelope(
-            event_id=f"merch:{order_id}:{status}",
-            event_type="order.updated",
-            order_id=order_id,
-            raw=raw,
-            received_at=datetime.now(timezone.utc).isoformat(),
-            source="merchant",
-        )
+        envelope = merchant_envelope(order_id, status, amount, currency)
         self._publisher.publish(order_id=order_id, envelope=envelope)
 
     def _pick_profile(self) -> str:
@@ -292,20 +278,12 @@ def emit_synthetic_captures(
                 "order_id": oid,
                 "method": "upi",
             }
-            raw = {
-                "entity": "event",
-                "event": "payment.captured",
-                "contains": ["payment"],
-                "payload": {"payment": {"entity": pay}},
-                "created_at": int(time.time()),
-            }
-            envelope = build_envelope(
+            envelope = razorpay_envelope(
                 event_id=f"evt_{uuid.uuid4().hex[:16]}",
                 event_type="payment.captured",
                 order_id=oid,
-                raw=raw,
-                received_at=datetime.now(timezone.utc).isoformat(),
-                source="razorpay",
+                entity_key="payment",
+                entity=pay,
             )
             publisher.publish(order_id=oid, envelope=envelope)
             order_ids.append(oid)

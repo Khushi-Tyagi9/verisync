@@ -87,15 +87,19 @@ class PendingRecheckSweep:
         store: PostgresStateStore,
         runner: RecheckRunner,
         settings: WorkerSettings,
+        limit: int = 500,
     ) -> None:
         self._store = store
         self._runner = runner
         self._grace = settings.pending_sweep_grace_seconds
+        self._limit = limit
 
     def run_once(self, now: Optional[datetime] = None) -> int:
         now = now or datetime.now(timezone.utc)
         with self._store.connection() as conn:
-            orphans = self._store.list_orphaned_pending(conn, grace_seconds=self._grace)
+            orphans = self._store.list_orphaned_pending(
+                conn, grace_seconds=self._grace, limit=self._limit
+            )
         for order_id in orphans:
             try:
                 self._runner.resolve_order(order_id, now)

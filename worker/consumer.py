@@ -26,13 +26,13 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from decision.engine import evaluate
-from decision.models import Action, ReconStatus, ReviewItem
+from decision.models import Action, ReviewItem
 
 from .config import WorkerSettings, load_settings
 from .delayqueue import RedisDelayQueue
 from .idempotency import RedisIdempotencyFilter
 from .normalize import envelope_to_event
+from .reconcile import reconcile_event
 from .state import PostgresStateStore
 
 log = logging.getLogger("verisync.worker")
@@ -195,26 +195,13 @@ class ReconciliationWorker:
             log.debug("pre-filter hit, skipping %s", event.event_id)
             return True
 
-        now = datetime.now(timezone.utc)
-        with self._store.connection() as conn:
-            state = self._store.read_state(conn, event.order_id)
-            current_status = (
-                ReconStatus(state.row.status) if state.row is not None else None
-            )
-            evaluation = evaluate(
-                event=event,
-                view=state.view,
-                current_status=current_status,
-                now=now,
-                recheck_delay=self._recheck_delay,
-            )
-            result = self._store.apply(
-                conn,
-                event=event,
-                decision=evaluation.decision,
-                projected_view=evaluation.view,
-                prior_row=state.row,
-            )
+        reconciled = reconcile_event(
+            self._store,
+            event,
+            now=datetime.now(timezone.utc),
+            recheck_delay=self._recheck_delay,
+        )
+        evaluation, result = reconciled.evaluation, reconciled.result
 
         self._idem.mark_seen(event.event_id)
 
