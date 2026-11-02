@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 from merchant_sim.envelopes import merchant_envelope
 from merchant_sim.store import MerchantOrderStore
@@ -95,7 +95,13 @@ class LiteProcessor:
         )
         return reconciled
 
-    def process_due_rechecks(self, now: Optional[datetime] = None, limit: Optional[int] = None) -> RecheckCounts:
+    def process_due_rechecks(
+        self,
+        now: Optional[datetime] = None,
+        limit: Optional[int] = None,
+        *,
+        should_stop: Optional[Callable[[], bool]] = None,
+    ) -> RecheckCounts:
         """Reclaim stuck PROCESSING rows, then resolve every recheck whose
         recheck_at has passed (grace is 0 in this mode)."""
         now = now or datetime.now(timezone.utc)
@@ -109,11 +115,12 @@ class LiteProcessor:
                 runner=runner,
                 settings=self._settings,
                 limit=limit if limit is not None else self._limit,
+                should_stop=should_stop,
             ),
             settings=self._settings,
         )
         # No sweeps.close(): it would close the shared store.
-        reclaimed, resolved = sweeps.run_once(now)
+        reclaimed, resolved = sweeps.run_once(now, should_stop=should_stop)
         return RecheckCounts(reclaimed=reclaimed, resolved=resolved)
 
     def process_due_merchant_transitions(
@@ -122,6 +129,7 @@ class LiteProcessor:
         limit: int = 20,
         *,
         before_rechecks: Optional[bool] = None,
+        should_stop: Optional[Callable[[], bool]] = None,
     ) -> int:
         """Flip due merchant_orders to paid and reconcile the resulting merchant
         event directly. Returns how many fired.
@@ -152,6 +160,8 @@ class LiteProcessor:
             ]
         fired = 0
         for d in due:
+            if should_stop is not None and should_stop():
+                break
             with self._merchant.connection() as conn:
                 claimed = self._merchant.mark_paid(conn, d.order_id)
             if claimed:

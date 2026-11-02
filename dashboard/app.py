@@ -234,6 +234,7 @@ def _add_live_routes(app: FastAPI, settings: DashboardSettings) -> None:
             "reclaimed": result.reclaimed,
             "rechecks_resolved": result.rechecks_resolved,
             "merchant_paid": result.merchant_paid,
+            "partial": result.partial,
         }
 
     @app.get("/api/live/orders")

@@ -21,6 +21,8 @@ class LiteSettings:
     lag_seconds: int = 60
     tick_limit: int = 20
     max_live_orders: int = 500
+    # Wall-clock allowance for one tick; keeps it inside a serverless function limit.
+    tick_budget_seconds: float = 6.0
 
 
 def _int(name: str, default: int) -> int:
@@ -52,4 +54,5 @@ def load_lite_settings(
         lag_seconds=_int("DASHBOARD_LIVE_LAG_SECONDS", 60),
         tick_limit=_int("DASHBOARD_LIVE_TICK_LIMIT", 20),
         max_live_orders=_int("DASHBOARD_LIVE_MAX_ORDERS", 500),
+        tick_budget_seconds=float(_int("DASHBOARD_LIVE_TICK_BUDGET_SECONDS", 6)),
     )

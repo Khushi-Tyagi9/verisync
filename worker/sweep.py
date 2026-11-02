@@ -23,7 +23,7 @@ import logging
 import signal
 import time
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from decision.models import AuditEntry, ReviewItem, Source
 
@@ -88,11 +88,14 @@ class PendingRecheckSweep:
         runner: RecheckRunner,
         settings: WorkerSettings,
         limit: int = 500,
+        should_stop: Optional[Callable[[], bool]] = None,
     ) -> None:
         self._store = store
         self._runner = runner
         self._grace = settings.pending_sweep_grace_seconds
         self._limit = limit
+        # Checked before each order; lets a caller with a time budget stop early.
+        self._should_stop = should_stop
 
     def run_once(self, now: Optional[datetime] = None) -> int:
         now = now or datetime.now(timezone.utc)
@@ -100,14 +103,18 @@ class PendingRecheckSweep:
             orphans = self._store.list_orphaned_pending(
                 conn, grace_seconds=self._grace, limit=self._limit
             )
+        handled = 0
         for order_id in orphans:
+            if self._should_stop is not None and self._should_stop():
+                break
+            handled += 1
             try:
                 self._runner.resolve_order(order_id, now)
             except Exception:
                 log.exception("fallback recheck failed for %s", order_id)
-        if orphans:
-            log.info("PENDING_RECHECK fallback resolved %d orphan(s)", len(orphans))
-        return len(orphans)
+        if handled:
+            log.info("PENDING_RECHECK fallback resolved %d orphan(s)", handled)
+        return handled
 
 
 @dataclasses.dataclass
@@ -137,9 +144,15 @@ class SweepService:
     def request_stop(self, *_signal_args: Any) -> None:
         self._stopping = True
 
-    def run_once(self, now: Optional[datetime] = None) -> tuple[int, int]:
+    def run_once(
+        self,
+        now: Optional[datetime] = None,
+        should_stop: Optional[Callable[[], bool]] = None,
+    ) -> tuple[int, int]:
         now = now or datetime.now(timezone.utc)
         reclaimed = self.stuck.run_once(now)
+        if should_stop is not None and should_stop():
+            return reclaimed, 0
         resolved = self.pending.run_once(now)
         return reclaimed, resolved
 

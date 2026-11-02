@@ -183,13 +183,13 @@ class RecordingProcessor:
     def process_event(self, envelope, *, now=None):
         self.events.append(envelope["event_id"])
 
-    def process_due_rechecks(self, now, limit):
+    def process_due_rechecks(self, now, limit, *, should_stop=None):
         from lite.processor import RecheckCounts
 
         self.rechecks.append(limit)
         return RecheckCounts(reclaimed=1, resolved=2)
 
-    def process_due_merchant_transitions(self, now, limit, *, before_rechecks=None):
+    def process_due_merchant_transitions(self, now, limit, *, before_rechecks=None, should_stop=None):
         self.merchant.append((limit, before_rechecks))
         return 1
 
@@ -233,10 +233,11 @@ def test_tick_runs_bounded_work_under_a_transaction_level_lock():
     assert "pg_advisory_lock" not in all_sql and "pg_try_advisory_lock" not in all_sql
 
 
-def test_tick_skips_the_late_merchant_pass_once_the_budget_is_spent():
+def test_tick_does_no_work_when_the_budget_is_already_spent():
     svc, _, proc, _ = _service(script={"pg_try_advisory_xact_lock": [(True,)]})
-    svc.tick(budget_seconds=-1)
-    assert proc.rechecks and proc.merchant == [(20, True)]
+    result = svc.tick(budget_seconds=-1)
+    assert proc.rechecks == [] and proc.merchant == []
+    assert result.ran is True and result.partial is True
 
 
 # --------------------------------------------------------------------------- #
@@ -387,3 +388,159 @@ def test_merchant_transitions_split_around_the_armed_recheck():
     assert run(True) == ["early", "unarmed"]
     assert run(False) == ["late"]
     assert run(None) == ["early", "late", "unarmed"]
+
+
+# --------------------------------------------------------------------------- #
+# tick time budget (fake clock)
+# --------------------------------------------------------------------------- #
+class FakeClock:
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, seconds):
+        self.t += seconds
+
+
+class SlowProcessor(RecordingProcessor):
+    """Each stage burns fake time, so the budget can run out between stages."""
+
+    def __init__(self, clock, *, merchant_cost=0.0, recheck_cost=0.0):
+        super().__init__()
+        self.clock, self.merchant_cost, self.recheck_cost = clock, merchant_cost, recheck_cost
+
+    def process_due_rechecks(self, now, limit, *, should_stop=None):
+        self.clock.advance(self.recheck_cost)
+        return super().process_due_rechecks(now, limit, should_stop=should_stop)
+
+    def process_due_merchant_transitions(self, now, limit, *, before_rechecks=None, should_stop=None):
+        self.clock.advance(self.merchant_cost)
+        return super().process_due_merchant_transitions(
+            now, limit, before_rechecks=before_rechecks, should_stop=should_stop
+        )
+
+
+def _timed_service(processor, clock, budget):
+    pool = FakePool({"pg_try_advisory_xact_lock": [(True,)]})
+    return LiteService(pool=pool, processor=processor, merchant_store=FakeMerchantStore(),
+                       settings=_settings(tick_budget_seconds=budget),
+                       clock=lambda: NOW, monotonic=clock)
+
+
+def test_tick_within_budget_visits_every_stage_and_is_not_partial():
+    clock = FakeClock()
+    proc = SlowProcessor(clock, merchant_cost=1, recheck_cost=1)
+    result = _timed_service(proc, clock, budget=10).tick()
+    assert proc.merchant == [(20, True), (20, False)] and proc.rechecks == [20]
+    assert result.partial is False
+
+
+def test_tick_stops_before_the_recheck_stage_when_the_first_stage_spends_the_budget():
+    clock = FakeClock()
+    proc = SlowProcessor(clock, merchant_cost=5)
+    result = _timed_service(proc, clock, budget=3).tick()
+    assert proc.merchant == [(20, True)]
+    assert proc.rechecks == []
+    assert result.partial is True and result.merchant_paid == 1 and result.ran is True
+
+
+def test_tick_stops_before_the_late_merchant_stage_when_rechecks_spend_the_budget():
+    clock = FakeClock()
+    proc = SlowProcessor(clock, recheck_cost=5)
+    result = _timed_service(proc, clock, budget=3).tick()
+    assert proc.merchant == [(20, True)] and proc.rechecks == [20]
+    assert result.partial is True
+    assert (result.reclaimed, result.rechecks_resolved) == (1, 2)   # work done is kept
+
+
+class ClockedStore(FakeStore):
+    """FakeStore whose apply() costs one fake second; reports no armed rechecks."""
+
+    def __init__(self, clock):
+        super().__init__()
+        self.clock = clock
+
+    @contextmanager
+    def connection(self):
+        class C:
+            def execute(self_, sql, params=None):
+                return _Result([])
+
+        yield C()
+
+    def apply(self, *a, **kw):
+        self.clock.advance(1)
+        return super().apply(*a, **kw)
+
+
+def test_tick_stops_between_merchant_items_when_the_budget_runs_out():
+    from merchant_sim.store import DueOrder
+
+    clock = FakeClock()
+    due = [DueOrder(f"order_LIVE_normal_{i:012x}", 50_000, "INR") for i in range(5)]
+    merchant = FakeMerchantStore(due=due)
+    processor = _processor(merchant=merchant, store=ClockedStore(clock))
+    pool = FakePool({"pg_try_advisory_xact_lock": [(True,)]})
+    svc = LiteService(pool=pool, processor=processor, merchant_store=merchant,
+                      settings=_settings(tick_budget_seconds=2.5),
+                      clock=lambda: NOW, monotonic=clock)
+
+    result = svc.tick()
+
+    # checks happen at t=0,1,2 (<2.5, process) and t=3 (stop): three of five
+    assert len(merchant.paid) == 3
+    assert result.merchant_paid == 3 and result.partial is True
+
+
+def _sweep_parts(clock, n=5):
+    from worker.sweep import PendingRecheckSweep
+
+    resolved = []
+
+    class Store:
+        @contextmanager
+        def connection(self):
+            yield object()
+
+        def list_orphaned_pending(self, conn, *, grace_seconds, limit):
+            return [f"o{i}" for i in range(n)][:limit]
+
+    class Runner:
+        def resolve_order(self, order_id, now):
+            resolved.append(order_id)
+            clock.advance(1)
+
+    return PendingRecheckSweep, Store(), Runner(), resolved
+
+
+def test_pending_sweep_stops_between_items_when_asked():
+    clock = FakeClock()
+    cls, store, runner, resolved = _sweep_parts(clock)
+    budget_end = 2.5
+    sweep = cls(store=store, runner=runner, settings=load_worker_settings(env_file=None),
+                should_stop=lambda: clock() >= budget_end)
+    assert sweep.run_once(NOW) == 3 and resolved == ["o0", "o1", "o2"]
+
+
+def test_pending_sweep_without_a_stop_hook_handles_everything_as_before():
+    clock = FakeClock()
+    cls, store, runner, resolved = _sweep_parts(clock)
+    sweep = cls(store=store, runner=runner, settings=load_worker_settings(env_file=None))
+    assert sweep.run_once(NOW) == 5 and len(resolved) == 5
+
+
+def test_sweep_service_skips_the_pending_sweep_when_stopped_after_the_stuck_sweep():
+    from worker.sweep import SweepService
+
+    class Stuck:
+        def run_once(self, now):
+            return 2
+
+    class Pending:
+        def run_once(self, now):
+            raise AssertionError("must not run")
+
+    svc = SweepService(stuck=Stuck(), pending=Pending(), settings=load_worker_settings(env_file=None))
+    assert svc.run_once(NOW, should_stop=lambda: True) == (2, 0)

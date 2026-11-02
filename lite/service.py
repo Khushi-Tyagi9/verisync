@@ -25,6 +25,21 @@ TICK_LOCK_KEY = 0x76657269_73796E63
 CAP_LOCK_KEY = 0x76657269_73796E64
 
 
+class _Budget:
+    """A wall-clock allowance. ``expired()`` is the stop check handed to every
+    stage; it remembers whether it ever said stop."""
+
+    def __init__(self, seconds: float, monotonic: Callable[[], float]) -> None:
+        self._monotonic = monotonic
+        self._deadline = monotonic() + seconds
+        self.tripped = False
+
+    def expired(self) -> bool:
+        if self._monotonic() >= self._deadline:
+            self.tripped = True
+        return self.tripped
+
+
 class LiteError(ValueError):
     """A request the caller can fix; maps to HTTP 4xx."""
 
@@ -39,6 +54,9 @@ class TickResult:
     reclaimed: int = 0
     rechecks_resolved: int = 0
     merchant_paid: int = 0
+    # True when the time budget ran out before every stage and item was visited;
+    # the rest is picked up by the next tick.
+    partial: bool = False
 
 
 _COUNT_LIVE = "SELECT count(*) FROM merchant_orders WHERE starts_with(order_id, %s)"
@@ -85,12 +103,14 @@ class LiteService:
         merchant_store: MerchantOrderStore,
         settings: LiteSettings,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._pool = pool
         self._processor = processor
         self._merchant = merchant_store
         self._settings = settings
         self._clock = clock
+        self._monotonic = monotonic
 
     # ------------------------------------------------------------------ #
     def submit_orders(self, *, amount: int, scenario: str, count: int = 1) -> list[str]:
@@ -141,34 +161,48 @@ class LiteService:
         return [order_id for order_id, _ in plans]
 
     # ------------------------------------------------------------------ #
-    def tick(self, now: Optional[datetime] = None, *, budget_seconds: float = 6.0) -> TickResult:
+    def tick(self, now: Optional[datetime] = None, *, budget_seconds: Optional[float] = None) -> TickResult:
         """Run one bounded pass of the three processors, if no other instance is
-        mid-tick. The lock lives exactly as long as this transaction."""
+        mid-tick. The lock lives exactly as long as this transaction.
+
+        The time budget is checked before every stage and between items. When it
+        runs out the tick returns what it has with ``partial=True``."""
         now = now or self._clock()
         limit = self._settings.tick_limit
-        deadline = time.monotonic() + budget_seconds
+        budget = _Budget(
+            self._settings.tick_budget_seconds if budget_seconds is None else budget_seconds,
+            self._monotonic,
+        )
         with self._pool.connection() as lock_conn:
             got = lock_conn.execute(
                 "SELECT pg_try_advisory_xact_lock(%s)", (TICK_LOCK_KEY,)
             ).fetchone()[0]
             if not got:
                 return TickResult(ran=False)
+
+            paid = reclaimed = resolved = 0
             # Chronological per order: a paid transition due before the order's
             # recheck goes first, one due after it goes last (and finds the
             # order already resolved).
-            paid = self._processor.process_due_merchant_transitions(
-                now, limit, before_rechecks=True
-            )
-            rechecks = self._processor.process_due_rechecks(now, limit)
-            if time.monotonic() < deadline:
+            if not budget.expired():
                 paid += self._processor.process_due_merchant_transitions(
-                    now, limit, before_rechecks=False
+                    now, limit, before_rechecks=True, should_stop=budget.expired
+                )
+            if not budget.expired():
+                rechecks = self._processor.process_due_rechecks(
+                    now, limit, should_stop=budget.expired
+                )
+                reclaimed, resolved = rechecks.reclaimed, rechecks.resolved
+            if not budget.expired():
+                paid += self._processor.process_due_merchant_transitions(
+                    now, limit, before_rechecks=False, should_stop=budget.expired
                 )
         return TickResult(
             ran=True,
-            reclaimed=rechecks.reclaimed,
-            rechecks_resolved=rechecks.resolved,
+            reclaimed=reclaimed,
+            rechecks_resolved=resolved,
             merchant_paid=paid,
+            partial=budget.tripped,
         )
 
     # ------------------------------------------------------------------ #
