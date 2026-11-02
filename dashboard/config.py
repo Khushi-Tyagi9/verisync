@@ -26,6 +26,11 @@ class DashboardSettings:
     # Shown in the page header when set, e.g. to mark a read-only deployment as
     # a snapshot of a past run ("Snapshot of a 150-order batch run, Oct 8").
     snapshot_label: Optional[str] = None
+    # Serverless live mode (Postgres only): POST /api/orders, POST /api/tick.
+    # Off by default; when off those routes do not exist (404).
+    live_mode: bool = False
+    # Optional shared secret required (X-Write-Token or Bearer) on order writes.
+    write_token: Optional[str] = None
 
 
 def load_settings(env_file: Optional[str] = ".env") -> DashboardSettings:
@@ -51,5 +56,7 @@ def load_settings(env_file: Optional[str] = ".env") -> DashboardSettings:
         poll_interval_ms=_int("DASHBOARD_POLL_INTERVAL_MS", 2000),
         activity_limit=_int("DASHBOARD_ACTIVITY_LIMIT", 30),
         demo_mode=_bool("DASHBOARD_DEMO_MODE"),
+        live_mode=_bool("DASHBOARD_LIVE_MODE"),
+        write_token=os.environ.get("DASHBOARD_WRITE_TOKEN", "").strip() or None,
         snapshot_label=os.environ.get("DASHBOARD_SNAPSHOT_LABEL", "").strip() or None,
     )

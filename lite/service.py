@@ -56,6 +56,26 @@ _RECENT = """
 """
 
 
+def build_service(pool, lite_settings: Optional[LiteSettings] = None) -> "LiteService":
+    """Wire the Postgres-only stack onto an existing psycopg pool."""
+    from worker.state import PostgresStateStore
+
+    from .config import load_lite_settings
+
+    settings = lite_settings or load_lite_settings()
+    store = PostgresStateStore(pool)
+    merchant = MerchantOrderStore(pool)
+    processor = LiteProcessor(
+        store=store,
+        merchant_store=merchant,
+        settings=settings.worker,
+        limit=settings.tick_limit,
+    )
+    return LiteService(
+        pool=pool, processor=processor, merchant_store=merchant, settings=settings
+    )
+
+
 class LiteService:
     def __init__(
         self,

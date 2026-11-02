@@ -216,3 +216,133 @@ def test_snapshot_label_env_blank_means_unset(monkeypatch):
     assert load_settings(env_file=None).snapshot_label is None
     monkeypatch.setenv("DASHBOARD_SNAPSHOT_LABEL", "Oct 8 run")
     assert load_settings(env_file=None).snapshot_label == "Oct 8 run"
+
+
+# --- live mode -------------------------------------------------------------
+
+
+class _FakeLive:
+    def __init__(self, *, error=None):
+        self.submitted, self.ticks, self.error = [], 0, error
+
+    def submit_orders(self, *, amount, scenario, count):
+        if self.error:
+            raise self.error
+        self.submitted.append((amount, scenario, count))
+        return [f"order_LIVE_{scenario}_{i:012x}" for i in range(count)]
+
+    def tick(self):
+        from lite.service import TickResult
+
+        self.ticks += 1
+        return TickResult(ran=True, reclaimed=0, rechecks_resolved=1, merchant_paid=2)
+
+    def recent_orders(self, limit=25):
+        return []
+
+
+def _live_client(*, live_mode=True, token=None, live=None):
+    live = live or _FakeLive()
+    app = create_app(
+        settings=DashboardSettings(postgres_dsn="unused", live_mode=live_mode, write_token=token),
+        pool=object(),
+        live_service=live,
+    )
+    return TestClient(app), live
+
+
+_ORDER = {"amount": 50_000, "scenario": "normal", "count": 2}
+
+
+def test_live_routes_are_404_and_panel_absent_when_off():
+    client, live = _live_client(live_mode=False)
+    assert client.post("/api/orders", json=_ORDER).status_code == 404
+    assert client.post("/api/tick").status_code == 404
+    assert client.get("/api/live/orders").status_code == 404
+    assert client.get("/api/live/scenarios").status_code == 404
+    page = client.get("/").text
+    assert "Live demo: serverless mode" not in page
+    assert "<!--LIVE_PANEL-->" not in page and "__LIVE_NEEDS_TOKEN__" not in page
+    assert live.submitted == [] and live.ticks == 0
+
+
+def test_live_mode_env_flags_default_off(monkeypatch):
+    from dashboard.config import load_settings
+
+    monkeypatch.delenv("DASHBOARD_LIVE_MODE", raising=False)
+    monkeypatch.delenv("DASHBOARD_WRITE_TOKEN", raising=False)
+    s = load_settings(env_file=None)
+    assert s.live_mode is False and s.write_token is None
+    monkeypatch.setenv("DASHBOARD_LIVE_MODE", "1")
+    monkeypatch.setenv("DASHBOARD_WRITE_TOKEN", " s3cret ")
+    s = load_settings(env_file=None)
+    assert s.live_mode is True and s.write_token == "s3cret"
+
+
+def test_live_panel_shows_the_serverless_badge_when_on():
+    page = _live_client()[0].get("/").text
+    assert "Live demo: serverless mode. Postgres only." in page
+    assert "The full Redpanda and Redis pipeline runs via docker compose." in page
+
+
+def test_live_order_creation():
+    client, live = _live_client()
+    res = client.post("/api/orders", json=_ORDER)
+    assert res.status_code == 201
+    assert res.json()["created"] == 2
+    assert live.submitted == [(50_000, "normal", 2)]
+
+
+def test_live_order_count_is_capped_at_ten_per_request():
+    client, live = _live_client()
+    assert client.post("/api/orders", json={**_ORDER, "count": 11}).status_code == 422
+    assert client.post("/api/orders", json={**_ORDER, "count": 0}).status_code == 422
+    assert client.post("/api/orders", json={**_ORDER, "count": 10}).status_code == 201
+    assert live.submitted == [(50_000, "normal", 10)]
+
+
+def test_live_write_token_is_required_when_configured():
+    client, live = _live_client(token="s3cret")
+    assert client.post("/api/orders", json=_ORDER).status_code == 401
+    assert client.post("/api/orders", json=_ORDER, headers={"X-Write-Token": "nope"}).status_code == 401
+    assert client.post("/api/orders", json=_ORDER, headers={"X-Write-Token": "s3cret"}).status_code == 201
+    assert client.post("/api/orders", json=_ORDER, headers={"Authorization": "Bearer s3cret"}).status_code == 201
+    assert len(live.submitted) == 2
+
+
+def test_live_cap_and_validation_errors_map_to_http_codes():
+    from lite.service import CapExceeded, LiteError
+
+    capped, _ = _live_client(live=_FakeLive(error=CapExceeded("cap reached (5/5)")))
+    res = capped.post("/api/orders", json=_ORDER)
+    assert res.status_code == 429 and "cap reached" in res.json()["detail"]
+    bad, _ = _live_client(live=_FakeLive(error=LiteError("unknown scenario")))
+    assert bad.post("/api/orders", json=_ORDER).status_code == 400
+
+
+def test_live_tick_needs_no_token_and_is_throttled_per_instance():
+    client, live = _live_client(token="s3cret")
+    first = client.post("/api/tick").json()
+    assert first["ran"] is True and first["rechecks_resolved"] == 1 and first["merchant_paid"] == 2
+    second = client.post("/api/tick").json()
+    assert second == {"ran": False, "throttled": True}
+    assert live.ticks == 1
+
+
+def test_live_scenarios_endpoint_lists_the_catalog():
+    body = _live_client(token="x")[0].get("/api/live/scenarios").json()
+    assert body["needs_token"] is True and body["max_per_request"] == 10
+    keys = {s["key"] for s in body["scenarios"]}
+    assert keys == {"normal", "lagging", "stuck", "silent", "risky_drift", "reversal", "correlation_failure"}
+
+
+def test_read_only_import_does_not_load_lite_or_kafka():
+    import subprocess
+    import sys
+
+    code = (
+        "import sys; import dashboard.app; "
+        "bad = [m for m in ('lite', 'confluent_kafka', 'redis', 'merchant_sim') if m in sys.modules]; "
+        "assert not bad, bad"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)

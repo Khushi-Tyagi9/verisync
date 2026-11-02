@@ -103,6 +103,8 @@
     <span class="live"><span class="dot" id="dot"></span><span id="livetext">connecting&hellip;</span></span>
   </header>
 
+  <!--LIVE_PANEL-->
+
   <div class="warnbar" id="orphanWarn" hidden></div>
 
   <div class="cards" id="cards"></div>
@@ -223,6 +225,7 @@ function setLive(ok) {
 }
 
 async function tick() {
+  if (window.liveHook) window.liveHook();
   try {
     const res = await fetch("/api/summary", { cache: "no-store" });
     if (!res.ok) throw new Error(res.status);
