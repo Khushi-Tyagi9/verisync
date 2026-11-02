@@ -105,7 +105,7 @@ def test_index_serves_html_with_poll_interval_substituted():
         assert r.status_code == 200
         assert "text/html" in r.headers["content-type"]
         assert "__POLL_INTERVAL_MS__" not in r.text
-        assert "const POLL_MS = 1500;" in r.text
+        assert 'data-poll-ms="1500"' in r.text
 
 
 # --- demo mode -------------------------------------------------------------

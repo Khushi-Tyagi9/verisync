@@ -15,6 +15,7 @@ from typing import Callable, Optional
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
@@ -34,6 +35,17 @@ _LIVE_HTML = (Path(__file__).parent / "live.html").read_text(encoding="utf-8")
 
 # The page polls every couple of seconds; one tick per instance per second is plenty.
 _MIN_TICK_GAP_SECONDS = 1.0
+
+
+_LIVE_BADGE_HTML = (
+    '<div class="badge-live">Live demo: serverless mode. Postgres only. '
+    "The full Redpanda and Redis pipeline runs via docker compose.</div>"
+)
+_LIVE_TAB_HTML = (
+    '<button class="tab" role="tab" id="tab-live" aria-controls="panel-live" '
+    'aria-selected="false" tabindex="-1">Live scenarios</button>'
+)
+_LIVE_SCRIPT_HTML = '<script src="/assets/live.js" defer></script>'
 
 
 class OrderRequest(BaseModel):
@@ -95,7 +107,12 @@ def create_app(
         if settings.snapshot_label
         else "",
     )
-    page = page.replace("<!--LIVE_PANEL-->", _LIVE_HTML if settings.live_mode else "")
+    live = settings.live_mode
+    page = page.replace("<!--LIVE_BADGE-->", _LIVE_BADGE_HTML if live else "")
+    page = page.replace("<!--LIVE_TAB-->", _LIVE_TAB_HTML if live else "")
+    page = page.replace("<!--LIVE_PANEL-->", _LIVE_HTML if live else "")
+    page = page.replace("<!--LIVE_SCRIPT-->", _LIVE_SCRIPT_HTML if live else "")
+    page = page.replace("__LIVE_MODE__", "true" if live else "false")
     page = page.replace(
         "__LIVE_NEEDS_TOKEN__", "true" if settings.write_token else "false"
     )
@@ -132,6 +149,7 @@ def create_app(
                     app.state.pool.close()
 
     app = FastAPI(title="verisync dashboard", version="0.1.0", lifespan=lifespan)
+    app.mount("/assets", StaticFiles(directory=Path(__file__).parent / "assets"), name="assets")
     app.state.settings = settings
     app.state.pool = pool
     app.state.owns_pool = False

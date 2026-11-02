@@ -1,190 +1,30 @@
-<style>
-  .badge-live { background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn); border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; font-size: 13px; font-weight: 600; }
-  .livebox { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 22px; }
-  .livebox h2 { font-size: 13px; margin: 0 0 10px; text-transform: uppercase; letter-spacing: 0.04em; }
-  .liveform { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
-  .liveform label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
-  .liveform label[hidden] { display: none; }
-  .liveform input, .liveform select { padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font: inherit; }
-  .liveform input[type=number] { width: 90px; }
-  .liveform button { padding: 6px 14px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer; font: inherit; }
-  .liveform button:disabled { opacity: 0.5; cursor: default; }
-  .scenario-why { color: var(--muted); font-size: 12px; margin: 10px 0 0; }
-  .livemsg { font-size: 12px; margin-top: 8px; min-height: 18px; }
-  .livemsg.err { color: var(--bad); }
-  .livetable { margin-top: 14px; overflow-x: auto; }
-  .livetable table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  .livetable th, .livetable td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  .livetable th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
-  .livetable td.why { color: var(--muted); font-size: 12px; max-width: 360px; white-space: normal; }
-  .otag { font-size: 11px; font-weight: 650; padding: 2px 8px; border-radius: 6px; white-space: nowrap; }
-  .otag.good { background: var(--good-bg); color: var(--good); }
-  .otag.warn { background: var(--warn-bg); color: var(--warn); }
-  .otag.bad { background: var(--bad-bg); color: var(--bad); }
-  .otag.info { background: var(--info-bg); color: var(--info); }
-  .otag.quiet { background: var(--quiet-bg); color: var(--quiet); }
-  .match { font-size: 12px; margin-left: 6px; }
-  .match.yes { color: var(--good); }
-  .match.no { color: var(--bad); }
-</style>
-<div class="badge-live">Live demo: serverless mode. Postgres only. The full Redpanda and Redis pipeline runs via docker compose.</div>
-<div class="livebox" id="livebox">
-  <h2>Submit a synthetic order</h2>
-  <form class="liveform" id="liveForm">
-    <label>Amount (INR)
-      <input type="number" id="liveAmount" min="10" max="100000" step="1" value="500" required />
-    </label>
-    <label>Scenario
-      <select id="liveScenario"></select>
-    </label>
-    <label>Orders
-      <input type="number" id="liveCount" min="1" max="10" value="1" required />
-    </label>
-    <label id="liveTokenWrap" hidden>Write token
-      <input type="password" id="liveToken" autocomplete="off" />
-    </label>
-    <button type="submit" id="liveGo">Submit</button>
-  </form>
-  <div class="scenario-why" id="liveWhy"></div>
-  <div class="livemsg" id="liveMsg"></div>
-  <div class="livetable">
-    <table>
-      <thead><tr><th>order</th><th>scenario</th><th>outcome</th><th>why it ended there</th></tr></thead>
-      <tbody id="liveRows"></tbody>
-    </table>
+<section class="tabpanel" role="tabpanel" id="panel-live" aria-labelledby="tab-live" hidden>
+  <div class="livebox" id="livebox" data-needs-token="__LIVE_NEEDS_TOKEN__">
+    <h2>Live scenarios</h2>
+    <p class="sub" style="margin:0 0 12px">Submit a synthetic order and watch it move through the same decision engine. Each scenario shows where it should end and why. Synthetic data only; nothing real is touched.</p>
+    <form class="liveform" id="liveForm">
+      <label>Amount (INR)
+        <input type="number" id="liveAmount" min="10" max="100000" step="1" value="500" required />
+      </label>
+      <label>Scenario
+        <select id="liveScenario"></select>
+      </label>
+      <label>Orders
+        <input type="number" id="liveCount" min="1" max="10" value="1" required />
+      </label>
+      <label id="liveTokenWrap" hidden>Write token
+        <input type="password" id="liveToken" autocomplete="off" />
+      </label>
+      <button type="submit" id="liveGo">Submit</button>
+    </form>
+    <div class="scenario-why" id="liveWhy"></div>
+    <div class="livemsg" id="liveMsg" role="status" aria-live="polite"></div>
+    <div class="livetable">
+      <table>
+        <caption class="sr-only">Recent live orders and where they ended</caption>
+        <thead><tr><th scope="col">Order</th><th scope="col">Scenario</th><th scope="col">Outcome</th><th scope="col">Why it ended there</th></tr></thead>
+        <tbody id="liveRows"></tbody>
+      </table>
+    </div>
   </div>
-</div>
-<script>
-(function () {
-  const NEEDS_TOKEN = __LIVE_NEEDS_TOKEN__;
-  const TICK_GAP_MS = 2000;
-  let lastTick = 0;
-  let catalog = {};
-  const $ = (id) => document.getElementById(id);
-
-  function cell(tag, cls, text) {
-    const e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text != null) e.textContent = text;
-    return e;
-  }
-  function say(text, isErr) {
-    const m = $("liveMsg");
-    m.textContent = text;
-    m.className = "livemsg" + (isErr ? " err" : "");
-  }
-  function storedToken() { try { return localStorage.getItem("verisyncWriteToken") || ""; } catch (e) { return ""; } }
-  function storeToken(v) { try { localStorage.setItem("verisyncWriteToken", v); } catch (e) {} }
-
-  function showWhy() {
-    const s = catalog[$("liveScenario").value];
-    $("liveWhy").textContent = s ? "Expected: " + s.why : "";
-  }
-
-  async function loadCatalog() {
-    const res = await fetch("/api/live/scenarios", { cache: "no-store" });
-    if (!res.ok) return;
-    const body = await res.json();
-    const sel = $("liveScenario");
-    for (const s of body.scenarios) {
-      catalog[s.key] = s;
-      const o = document.createElement("option");
-      o.value = s.key;
-      o.textContent = s.label;
-      sel.appendChild(o);
-    }
-    $("liveCount").max = body.max_per_request;
-    showWhy();
-  }
-
-  function renderOrders(orders) {
-    const body = $("liveRows");
-    body.innerHTML = "";
-    if (!orders.length) {
-      const tr = cell("tr");
-      const td = cell("td", "", "No live orders yet. Submit one above.");
-      td.colSpan = 4;
-      tr.appendChild(td);
-      body.appendChild(tr);
-      return;
-    }
-    for (const o of orders) {
-      const tr = cell("tr");
-      tr.appendChild(cell("td", "oid", o.order_id.replace("order_LIVE_", "")));
-      tr.appendChild(cell("td", "", o.scenario_label || "?"));
-      const oc = cell("td");
-      oc.appendChild(cell("span", "otag " + o.outcome.tone, o.outcome.label));
-      if (o.recheck_in_seconds != null) oc.appendChild(cell("span", "match", "recheck in " + o.recheck_in_seconds + "s"));
-      if (o.outcome.terminal && o.expected_tag) {
-        const ok = o.outcome.tag === o.expected_tag;
-        oc.appendChild(cell("span", "match " + (ok ? "yes" : "no"), ok ? "as expected" : "unexpected"));
-      }
-      tr.appendChild(oc);
-      let why = o.why || "";
-      if (!o.outcome.terminal) why = "Still in progress. " + why;
-      tr.appendChild(cell("td", "why", why));
-      body.appendChild(tr);
-    }
-  }
-
-  async function refreshOrders() {
-    const res = await fetch("/api/live/orders", { cache: "no-store" });
-    if (res.ok) renderOrders((await res.json()).orders);
-  }
-
-  // Called by the main page on each poll.
-  window.liveHook = async function () {
-    try {
-      if (Date.now() - lastTick >= TICK_GAP_MS) {
-        lastTick = Date.now();
-        await fetch("/api/tick", { method: "POST" });
-      }
-      await refreshOrders();
-    } catch (e) { /* the summary poll reports connectivity */ }
-  };
-
-  $("liveScenario").addEventListener("change", showWhy);
-  $("liveForm").addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    const btn = $("liveGo");
-    btn.disabled = true;
-    say("submitting...", false);
-    const headers = { "Content-Type": "application/json" };
-    if (NEEDS_TOKEN) {
-      const t = $("liveToken").value;
-      storeToken(t);
-      headers["X-Write-Token"] = t;
-    }
-    try {
-      const res = await fetch("/api/orders", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          amount: Math.round(Number($("liveAmount").value) * 100),
-          scenario: $("liveScenario").value,
-          count: Number($("liveCount").value),
-        }),
-      });
-      const body = await res.json().catch(() => ({}));
-      if (res.ok) {
-        say("created " + body.created + " order(s)", false);
-        lastTick = 0;
-        await refreshOrders();
-      } else {
-        const d = body.detail;
-        say(typeof d === "string" ? d : "request rejected (" + res.status + ")", true);
-      }
-    } catch (e) {
-      say("request failed", true);
-    } finally {
-      btn.disabled = false;
-    }
-  });
-
-  if (NEEDS_TOKEN) {
-    $("liveTokenWrap").hidden = false;
-    $("liveToken").value = storedToken();
-  }
-  loadCatalog().then(refreshOrders).catch(() => {});
-})();
-</script>
+</section>
