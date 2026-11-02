@@ -159,7 +159,11 @@
     btn.disabled = true;
     try {
       const res = await fetch("/api/reconcile/sample", { cache: "no-store" });
-      if (!res.ok) throw new Error(String(res.status));
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        showError(err.error || "Could not load the sample data (" + res.status + ").");
+        return;
+      }
       const sample = await res.json();
       $("txtGateway").value = sample.gateway;
       $("txtMerchant").value = sample.merchant;
@@ -179,7 +183,8 @@
   // ------------------------------------------------------------------- run
   function showError(message, detail, field) {
     const box = $("resError");
-    box.replaceChildren(h("span", { text: message }), detail ? h("small", { text: detail }) : null);
+    // replaceChildren() would render a null argument as the text "null".
+    box.replaceChildren(...[h("span", { text: message }), detail ? h("small", { text: detail }) : null].filter(Boolean));
     setView("error");
     $("runStatus").textContent = "Something needs attention.";
     if (field === "gateway" || field === "merchant") {
@@ -202,10 +207,11 @@
     $("run").disabled = true;
     $("runStatus").textContent = "Reconciling…";
     setView("loading");
-    let res, payload;
+    let res, payload = {};
     try {
       res = await fetch("/api/reconcile", { method: "POST", headers: { "Content-Type": "application/json" }, body });
-      payload = await res.json().catch(() => ({}));
+      const raw = await res.text();
+      try { payload = JSON.parse(raw) || {}; } catch (e) { payload = {}; }
     } catch (e) {
       showError("Could not reach the server.", "Check your connection and try again.");
       updateRunEnabled();
@@ -213,7 +219,15 @@
     }
     updateRunEnabled();
     if (!res.ok) {
-      showError(payload.error || "The request was rejected (" + res.status + ").", null, payload.field);
+      const serverMessage = payload.error || (typeof payload.detail === "string" ? payload.detail : "");
+      if (serverMessage) {
+        showError(serverMessage, null, payload.field);
+      } else if (res.status >= 500) {
+        showError("The server hit an error (" + res.status + ") and could not check these files.",
+          "Nothing was stored. Try again, and contact the site owner if it keeps happening.");
+      } else {
+        showError("The request was rejected (" + res.status + ").");
+      }
       return;
     }
     state.result = payload;

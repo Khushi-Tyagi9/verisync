@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import hmac
+import logging
 import html
 import time
 from pathlib import Path
@@ -30,11 +31,36 @@ except ImportError:
     from config import DashboardSettings, load_settings
     from queries import build_summary
 
+_log = logging.getLogger("verisync.dashboard")
+
 _INDEX_HTML = (Path(__file__).parent / "index.html").read_text(encoding="utf-8")
 _LIVE_HTML = (Path(__file__).parent / "live.html").read_text(encoding="utf-8")
 
 # The page polls every couple of seconds; one tick per instance per second is plenty.
 _MIN_TICK_GAP_SECONDS = 1.0
+
+
+# Returned when the reconcile engine packages are missing from the deployment,
+# for example a Vercel project whose Root Directory is still "dashboard": the page
+# and assets ship, but decision/, worker/ and reconcile_tool/ do not.
+_ENGINE_MISSING = (
+    "The reconcile engine is not part of this deployment, so files cannot be "
+    "checked here. Deploy from the repository root (Vercel Root Directory) so "
+    "decision/, worker/ and reconcile_tool/ are included."
+)
+_RECONCILE_FAILED = (
+    "The server could not process these files. Nothing was stored. If it keeps "
+    "happening, report it together with the files."
+)
+
+
+def _load_reconcile_api():
+    """The reconcile module, or None when the engine is not deployed."""
+    try:
+        from reconcile_tool import api
+    except ModuleNotFoundError:
+        return None
+    return api
 
 
 _LIVE_BADGE_HTML = (
@@ -163,8 +189,11 @@ def create_app(
     @app.post("/api/reconcile")
     async def reconcile_endpoint(request: Request):
         """Stateless: parse the two exports in the body and return verdicts.
-        Always on. Touches no database, stores nothing, logs nothing."""
-        from reconcile_tool.api import MAX_BODY_BYTES, handle_reconcile
+        Always on. Touches no database, stores nothing, and never logs the input."""
+        api = _load_reconcile_api()
+        if api is None:
+            return JSONResponse({"error": _ENGINE_MISSING}, status_code=503)
+        MAX_BODY_BYTES, handle_reconcile = api.MAX_BODY_BYTES, api.handle_reconcile
 
         too_big = JSONResponse(
             {"error": f"Request body is larger than {MAX_BODY_BYTES // (1024 * 1024)} MB."},
@@ -179,14 +208,20 @@ def create_app(
             if size > MAX_BODY_BYTES:
                 return too_big
             chunks.append(chunk)
-        status, payload = await run_in_threadpool(handle_reconcile, b"".join(chunks))
+        try:
+            status, payload = await run_in_threadpool(handle_reconcile, b"".join(chunks))
+        except Exception as exc:
+            # Only the exception type: messages can quote cell values.
+            _log.error("reconcile failed: %s", type(exc).__name__)
+            return JSONResponse({"error": _RECONCILE_FAILED}, status_code=500)
         return JSONResponse(payload, status_code=status)
 
     @app.get("/api/reconcile/sample")
     def reconcile_sample():
-        from reconcile_tool.api import sample_data
-
-        return sample_data()
+        api = _load_reconcile_api()
+        if api is None:
+            return JSONResponse({"error": _ENGINE_MISSING}, status_code=503)
+        return api.sample_data()
 
     @app.get("/health")
     def health() -> dict:

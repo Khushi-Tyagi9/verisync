@@ -161,6 +161,26 @@ def main() -> int:
                         check("amount" in page.inner_text("#resError"), "bad input shows a clear error")
                         page.screenshot(path=str(out / f"{tag}-5-error.png"), full_page=True)
 
+                        # A plain-text 500 (what a broken deployment returns) and a
+                        # JSON error must both show a readable message, never "null".
+                        page.route("**/api/reconcile", lambda r: r.fulfill(
+                            status=500, content_type="text/plain; charset=utf-8", body="Internal Server Error"))
+                        page.click("#run")
+                        page.wait_for_function("document.getElementById('resError').innerText.includes('500')")
+                        text = page.inner_text("#resError")
+                        check("null" not in text and "server hit an error (500)" in text,
+                              f"text 500 shows a readable message ({text!r})")
+                        page.unroute("**/api/reconcile")
+                        page.route("**/api/reconcile", lambda r: r.fulfill(
+                            status=503, content_type="application/json",
+                            body='{"error": "The reconcile engine is not part of this deployment. Root Directory."}'))
+                        page.click("#run")
+                        page.wait_for_function("document.getElementById('resError').innerText.includes('Root Directory')")
+                        text = page.inner_text("#resError")
+                        check("null" not in text and "not part of this deployment" in text,
+                              f"JSON error shows the server's message ({text!r})")
+                        page.unroute("**/api/reconcile")
+
                     check(not problems, f"no page errors ({problems[:2]})")
                     ctx.close()
             browser.close()
