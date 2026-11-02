@@ -1,0 +1,16 @@
+order_id,status,amount,currency,event_time
+order_1001,paid,1200.50,INR,
+order_1002,pending,499.00,INR,
+order_1004,paid,750.00,INR,
+order_1005,paid,3000.00,INR,
+order_1006,pending,,,
+order_1007,paid,,,
+order_1008,paid,100.00,INR,
+order_1009,cancelled,,,
+order_1010,on-hold,,,
+order_1011,pending,,,
+order_1012,completed,640.75,INR,2026-11-01T10:05:00Z
+order_1013,paid,5000.00,INR,
+order_1014,failed,,,
+,paid,50.00,INR,
+order_1097,in transit,10.00,INR,

@@ -17,6 +17,7 @@ COPY worker ./worker
 COPY merchant_sim ./merchant_sim
 COPY dashboard ./dashboard
 COPY lite ./lite
+COPY reconcile_tool ./reconcile_tool
 COPY scripts ./scripts
 COPY db ./db
 
