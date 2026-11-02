@@ -140,6 +140,15 @@ def main() -> int:
         check(call(base, "GET", "/health") == (200, {"status": "ok"}), "GET /health")
         code, page = call(base, "GET", "/")
         check(code == 200 and "Live demo: serverless mode" in page, "GET / serves the live panel")
+        code, css = call(base, "GET", "/assets/app.css")
+        check(code == 200 and "--v-auto-ink" in css, "GET /assets/app.css serves the stylesheet")
+        code, sample = call(base, "GET", "/api/reconcile/sample")
+        check(code == 200 and "order_1001" in sample["gateway"], "GET /api/reconcile/sample")
+        code, rec = call(base, "POST", "/api/reconcile", {**sample, "amount_unit": "rupees"})
+        counts = {k: v["count"] for k, v in rec["summary"]["by_verdict"].items()} if code == 200 else {}
+        check(counts == {"AUTO_CORRECT": 3, "CONSISTENT": 3, "FLAGGED_RISKY": 1, "DISPUTED": 2,
+                         "CORRELATION_FAILED": 2, "UNRESOLVED": 3},
+              f"POST /api/reconcile on the sample, no token needed ({counts})")
         order = {"amount": 50_000, "scenario": "normal", "count": 1}
         check(call(base, "POST", "/api/orders", order)[0] == 401, "POST /api/orders without token -> 401")
         check(call(base, "POST", "/api/orders", {**order, "count": 11}, {"X-Write-Token": TOKEN})[0] == 422,
