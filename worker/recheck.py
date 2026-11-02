@@ -58,6 +58,34 @@ class _Outcome:
     rearm_at: Optional[datetime] = None
 
 
+def evaluate_recheck(
+    order_id: str,
+    token: str,
+    *,
+    view: Optional[OrderView],
+    now: datetime,
+    recheck_delay: timedelta,
+):
+    """Pure recheck resolution: a synthetic system event evaluated against the
+    order's current view with the row already PROCESSING and a merchant record
+    required. Shared by RecheckRunner and the stateless reconcile tool."""
+    synthetic = Event(
+        event_id=f"system:recheck:{order_id}:{token}",
+        source=Source.SYSTEM,
+        event_type="recheck.fired",
+        order_id=order_id,
+        occurred_at=now,
+    )
+    return evaluate(
+        event=synthetic,
+        view=view or OrderView.empty(order_id),
+        current_status=ReconStatus.PROCESSING,
+        now=now,
+        recheck_delay=recheck_delay,
+        require_merchant_record=True,
+    )
+
+
 class RecheckRunner:
     def __init__(
         self,
@@ -123,22 +151,8 @@ class RecheckRunner:
 
         with self._store.connection() as conn:
             state = self._store.read_state(conn, order_id)
-        view = state.view or OrderView.empty(order_id)
-
-        synthetic = Event(
-            event_id=f"system:recheck:{order_id}:{token}",
-            source=Source.SYSTEM,
-            event_type="recheck.fired",
-            order_id=order_id,
-            occurred_at=now,
-        )
-        evaluation = evaluate(
-            event=synthetic,
-            view=view,
-            current_status=ReconStatus.PROCESSING,
-            now=now,
-            recheck_delay=self._recheck_delay,
-            require_merchant_record=True,
+        evaluation = evaluate_recheck(
+            order_id, token, view=state.view, now=now, recheck_delay=self._recheck_delay
         )
         decision = evaluation.decision
 
