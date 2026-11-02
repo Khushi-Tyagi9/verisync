@@ -49,7 +49,7 @@ def test_user_files_are_reconciled_and_the_bad_row_is_a_row_error():
         "order_1001": "CONSISTENT",
         "order_1002": "AUTO_CORRECT",
         "order_1003": "FLAGGED_RISKY",
-        "order_1004": "UNRESOLVED",
+        "order_1004": "DISPUTED",  # gateway refund row only, merchant paid
         "order_1005": "CORRELATION_FAILED",
         "order_1006": "AUTO_CORRECT",
         "order_1007": "CONSISTENT",

@@ -94,3 +94,16 @@ def test_captured_vs_failed_and_pending_are_still_safe_drift():
     for status in (MerchantOrderStatus.FAILED, MerchantOrderStatus.PENDING):
         d = assess(_view(razorpay_status=PaymentStatus.CAPTURED, merchant_status=status))
         assert d.kind is DriftKind.SAFE, status
+
+
+def test_refund_without_a_seen_capture_against_merchant_paid_is_a_reversal():
+    # order_1004 in the uploaded sample: the gateway export holds only the
+    # refund row, the merchant shows paid.
+    d = assess(_view(merchant_status=MerchantOrderStatus.PAID, reversal_ids=frozenset({"rfnd_1004"})))
+    assert d.kind is DriftKind.REVERSAL
+
+
+def test_refund_without_a_seen_capture_and_merchant_not_paid_is_not_a_reversal():
+    for status in (None, MerchantOrderStatus.PENDING, MerchantOrderStatus.CANCELLED):
+        d = assess(_view(merchant_status=status, reversal_ids=frozenset({"rfnd_1"})))
+        assert d.kind is not DriftKind.REVERSAL, status

@@ -25,6 +25,11 @@ def assess(view: OrderView) -> DriftAssessment:
     # sub-entity against an order that has already settled.
     if view.reversal_ids and (view.settled or rp in (PaymentStatus.CAPTURED, PaymentStatus.REFUNDED)):
         return out(DriftKind.REVERSAL, "reversal sub-entity against a settled order")
+    # A refund/dispute seen without the capture (an export that only holds the
+    # refund row) against an order the merchant shows as paid: the money moved,
+    # so it is still a reversal against a settled order, not an unknown.
+    if view.reversal_ids and mc is MerchantOrderStatus.PAID:
+        return out(DriftKind.REVERSAL, "reversal sub-entity against an order the merchant shows paid")
 
     if rp is PaymentStatus.REFUNDED:
         return out(

@@ -47,6 +47,8 @@ CASES = [
     ("merchant_amount_mismatch", "A,captured,100,INR,,,\n", "A,paid,90,INR,\n", Verdict.CORRELATION_FAILED),
     ("merchant_currency_mismatch", "A,captured,100,INR,,,\n", "A,paid,100,USD,\n", Verdict.CORRELATION_FAILED),
     ("merchant_only", "", "A,paid,100,INR,\n", Verdict.UNRESOLVED),
+    ("refund_only_gateway_merchant_paid", "A,refunded,100,INR,rfnd_1,,\n", "A,paid,100,INR,\n", Verdict.DISPUTED),
+    ("refund_only_gateway_merchant_pending", "A,refunded,100,INR,rfnd_1,,\n", "A,pending,,,\n", Verdict.UNRESOLVED),
 ]
 
 
