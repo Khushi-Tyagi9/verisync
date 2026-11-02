@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import contextlib
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 
 try:
@@ -27,13 +27,53 @@ except ImportError:
 _INDEX_HTML = (Path(__file__).parent / "index.html").read_text(encoding="utf-8")
 
 
+DEMO_MAX_ORDERS = 50
+
+_DEMO_CONTROL_HTML = """<span class="demo">
+      <label>Simulate <input type="number" id="demoCount" min="1" max="50" value="10" /> orders</label>
+      <button type="button" id="demoGo">Simulate</button>
+      <span class="sub" id="demoMsg"></span>
+    </span>
+    <script>
+      document.getElementById("demoGo").addEventListener("click", async () => {
+        const n = document.getElementById("demoCount").value;
+        const msg = document.getElementById("demoMsg");
+        msg.textContent = "sending...";
+        try {
+          const res = await fetch("/api/demo/orders?count=" + encodeURIComponent(n), { method: "POST" });
+          const body = await res.json();
+          msg.textContent = res.ok ? "emitted " + body.emitted : (body.detail || res.status);
+        } catch (e) {
+          msg.textContent = "failed";
+        }
+      });
+    </script>"""
+
+
+def _emit_synthetic_orders(count: int) -> list[str]:
+    # Imported here, not at module top: merchant_sim pulls in the Kafka client,
+    # which the read-only Vercel deployment does not install and never calls.
+    from merchant_sim.config import load_settings as load_sim_settings
+    from merchant_sim.simulator import emit_synthetic_captures
+
+    return emit_synthetic_captures(load_sim_settings(), count)
+
+
 def create_app(
-    *, settings: Optional[DashboardSettings] = None, pool=None
+    *,
+    settings: Optional[DashboardSettings] = None,
+    pool=None,
+    emit_orders: Optional[Callable[[int], list[str]]] = None,
 ) -> FastAPI:
-    """Application factory. Pass `pool` to inject a fake in tests; leave it None
-    and a psycopg pool is opened on startup and closed on shutdown."""
+    """Application factory. Pass `pool` / `emit_orders` to inject fakes in
+    tests; leave `pool` None and a psycopg pool is opened on startup and closed
+    on shutdown."""
     settings = settings or load_settings()
+    emit_orders = emit_orders or _emit_synthetic_orders
     page = _INDEX_HTML.replace("__POLL_INTERVAL_MS__", str(settings.poll_interval_ms))
+    page = page.replace(
+        "<!--DEMO_CONTROL-->", _DEMO_CONTROL_HTML if settings.demo_mode else ""
+    )
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -70,7 +110,20 @@ def create_app(
             data = build_summary(conn, activity_limit=settings.activity_limit)
         return JSONResponse(data)
 
+    if settings.demo_mode:
+        # Registered only in demo mode, so with it off the route is a plain 404.
+        @app.post("/api/demo/orders")
+        def demo_orders(count: int = Query(10, ge=1, le=DEMO_MAX_ORDERS)):
+            try:
+                order_ids = emit_orders(count)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=502, detail=f"could not emit orders: {exc}"
+                )
+            return JSONResponse({"emitted": len(order_ids), "order_ids": order_ids})
+
     return app
+
 
 app = create_app()
 def main() -> int:

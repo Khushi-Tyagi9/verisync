@@ -106,3 +106,76 @@ def test_index_serves_html_with_poll_interval_substituted():
         assert "text/html" in r.headers["content-type"]
         assert "__POLL_INTERVAL_MS__" not in r.text
         assert "const POLL_MS = 1500;" in r.text
+
+
+# --- demo mode -------------------------------------------------------------
+
+
+def _demo_client(*, demo_mode, emit=None):
+    calls = []
+
+    def fake_emit(count):
+        calls.append(count)
+        if emit is not None:
+            return emit(count)
+        return [f"order_{i}" for i in range(count)]
+
+    app = create_app(
+        settings=DashboardSettings(postgres_dsn="unused", demo_mode=demo_mode),
+        pool=object(),
+        emit_orders=fake_emit,
+    )
+    return TestClient(app), calls
+
+
+def test_demo_route_is_404_and_control_absent_when_off():
+    client, calls = _demo_client(demo_mode=False)
+    assert client.post("/api/demo/orders?count=5").status_code == 404
+    assert "demoGo" not in client.get("/").text
+    assert calls == []
+
+
+def test_demo_mode_env_flag_defaults_to_off(monkeypatch):
+    from dashboard.config import load_settings
+
+    monkeypatch.delenv("DASHBOARD_DEMO_MODE", raising=False)
+    assert load_settings(env_file=None).demo_mode is False
+    monkeypatch.setenv("DASHBOARD_DEMO_MODE", "true")
+    assert load_settings(env_file=None).demo_mode is True
+
+
+def test_demo_route_emits_and_control_rendered_when_on():
+    client, calls = _demo_client(demo_mode=True)
+    assert "demoGo" in client.get("/").text
+    res = client.post("/api/demo/orders?count=7")
+    assert res.status_code == 200
+    assert res.json()["emitted"] == 7
+    assert calls == [7]
+
+
+def test_demo_route_validates_count_range():
+    client, calls = _demo_client(demo_mode=True)
+    for bad in ("0", "51", "-3", "abc"):
+        assert client.post(f"/api/demo/orders?count={bad}").status_code == 422
+    assert client.post("/api/demo/orders?count=50").status_code == 200
+    assert client.post("/api/demo/orders?count=1").status_code == 200
+    assert calls == [50, 1]
+
+
+def test_demo_route_reports_emit_failure_as_502():
+    def boom(_count):
+        raise RuntimeError("broker down")
+
+    client, _ = _demo_client(demo_mode=True, emit=boom)
+    assert client.post("/api/demo/orders?count=2").status_code == 502
+
+
+def test_dashboard_import_does_not_pull_in_kafka():
+    import subprocess
+    import sys
+
+    code = (
+        "import sys; import dashboard.app; "
+        "assert 'confluent_kafka' not in sys.modules and 'merchant_sim' not in sys.modules"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)

@@ -20,6 +20,9 @@ class DashboardSettings:
     poll_interval_ms: int = 2000
     # Rows shown in the live activity feed.
     activity_limit: int = 30
+    # Off by default so a public (Vercel) deployment stays read-only. When on,
+    # the app exposes POST /api/demo/orders and the page shows a control for it.
+    demo_mode: bool = False
 
 
 def load_settings(env_file: Optional[str] = ".env") -> DashboardSettings:
@@ -35,10 +38,14 @@ def load_settings(env_file: Optional[str] = ".env") -> DashboardSettings:
         except ValueError as exc:
             raise RuntimeError(f"{name} must be an integer, got {raw!r}") from exc
 
+    def _bool(name: str) -> bool:
+        return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
     return DashboardSettings(
         postgres_dsn=os.environ.get("POSTGRES_DSN", _DEFAULT_DSN),
         host=os.environ.get("DASHBOARD_HOST", "127.0.0.1"),
         port=_int("DASHBOARD_PORT", 8050),
         poll_interval_ms=_int("DASHBOARD_POLL_INTERVAL_MS", 2000),
         activity_limit=_int("DASHBOARD_ACTIVITY_LIMIT", 30),
+        demo_mode=_bool("DASHBOARD_DEMO_MODE"),
     )
